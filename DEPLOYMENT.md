@@ -62,7 +62,7 @@ encryption key requires a planned token reauthorization or data re-encryption.
 
 Deploy only after the Access application protects the dashboard hostname.
 
-Current production version: `71b692e1-4de9-4b58-93d8-a5c2fbd3e09f`.
+Current production version: `6c625744-ed77-48f8-8258-844b28f04e46`.
 
 ## Verification
 
