@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto"
+
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -42,3 +44,11 @@ export const randomState = (): string => bytesToBase64(crypto.getRandomValues(ne
 
 export const sha256 = async (value: string): Promise<string> =>
   bytesToBase64(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))))
+
+export const constantTimeEqual = async (left: string, right: string): Promise<boolean> => {
+  const [leftDigest, rightDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(left)),
+    crypto.subtle.digest("SHA-256", encoder.encode(right))
+  ])
+  return timingSafeEqual(new Uint8Array(leftDigest), new Uint8Array(rightDigest))
+}

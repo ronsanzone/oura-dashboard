@@ -1,4 +1,4 @@
-import type { Env } from "./types.js"
+import type { AppEnv } from "./types.js"
 
 const API_URL = "https://api.ouraring.com/v2/webhook/subscription"
 const CALLBACK_URL = "https://oura-hooks.ronsanzone.dev/oura-webhook"
@@ -29,7 +29,7 @@ type Subscription = {
   expiration_time: string
 }
 
-const credentials = (env: Env): HeadersInit => {
+const credentials = (env: AppEnv): HeadersInit => {
   if (!env.OURA_CLIENT_ID || !env.OURA_CLIENT_SECRET) throw new Error("Oura webhook client credentials are not configured")
   return {
     "content-type": "application/json",
@@ -43,7 +43,7 @@ const checked = async <T>(response: Response): Promise<T> => {
   return response.json<T>()
 }
 
-export const reconcileOuraWebhooks = async (env: Env): Promise<{ created: number; renewed: number; active: number }> => {
+export const reconcileOuraWebhooks = async (env: AppEnv): Promise<{ created: number; renewed: number; active: number }> => {
   if (!env.OURA_WEBHOOK_VERIFICATION_TOKEN) throw new Error("Oura webhook verification token is not configured")
   const headers = credentials(env)
   const subscriptions = await checked<Subscription[]>(await fetch(API_URL, { headers }))

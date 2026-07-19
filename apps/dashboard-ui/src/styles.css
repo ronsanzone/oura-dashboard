@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
-
 :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #080b12; color: #dce7f5; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: radial-gradient(circle at 78% -10%, rgba(67, 56, 143, .18), transparent 32rem), #080b12; }

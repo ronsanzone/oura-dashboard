@@ -1,6 +1,6 @@
 import type { DatasetCount, ObservatoryStatus, OuraRecord } from "@oura/shared"
 import { decrypt, encrypt, sha256 } from "./crypto.js"
-import type { Env, StoredTokens } from "./types.js"
+import type { AppEnv, StoredTokens } from "./types.js"
 
 type RecordRow = {
   data_type: string
@@ -12,7 +12,7 @@ type RecordRow = {
   synced_at: string
 }
 
-export const status = async (env: Env): Promise<ObservatoryStatus> => {
+export const status = async (env: AppEnv): Promise<ObservatoryStatus> => {
   const [summary, datasets, token] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(*) AS records, COUNT(DISTINCT record_date) AS days,
@@ -39,7 +39,7 @@ export const status = async (env: Env): Promise<ObservatoryStatus> => {
 }
 
 export const records = async (
-  env: Env,
+  env: AppEnv,
   options: { start?: string; end?: string; type?: string }
 ): Promise<OuraRecord[]> => {
   const clauses: string[] = []
@@ -74,7 +74,7 @@ const recordId = async (dataType: string, item: Record<string, unknown>): Promis
 }
 
 export const upsertRecords = async (
-  env: Env,
+  env: AppEnv,
   dataType: string,
   items: readonly Record<string, unknown>[]
 ): Promise<number> => {
@@ -107,12 +107,12 @@ export const upsertRecords = async (
   return statements.length
 }
 
-const requireEncryptionKey = (env: Env): string => {
+const requireEncryptionKey = (env: AppEnv): string => {
   if (!env.OURA_TOKEN_ENCRYPTION_KEY) throw new Error("OURA_TOKEN_ENCRYPTION_KEY is not configured")
   return env.OURA_TOKEN_ENCRYPTION_KEY
 }
 
-export const storeTokens = async (env: Env, tokens: StoredTokens): Promise<void> => {
+export const storeTokens = async (env: AppEnv, tokens: StoredTokens): Promise<void> => {
   const key = requireEncryptionKey(env)
   await env.DB.prepare(`
     INSERT INTO oauth_tokens (
@@ -133,7 +133,7 @@ export const storeTokens = async (env: Env, tokens: StoredTokens): Promise<void>
   ).run()
 }
 
-export const loadTokens = async (env: Env): Promise<StoredTokens | null> => {
+export const loadTokens = async (env: AppEnv): Promise<StoredTokens | null> => {
   const row = await env.DB.prepare(`
     SELECT access_token_ciphertext, refresh_token_ciphertext, expires_at, scope
     FROM oauth_tokens WHERE account_id = 'primary'

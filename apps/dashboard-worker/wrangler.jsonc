@@ -2,17 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "oura-observatory-local",
   "main": "dist/index.js",
-  "no_bundle": true,
-  "find_additional_modules": true,
-  "base_dir": "dist",
-  "preserve_file_names": true,
-  "rules": [
-    {
-      "type": "ESModule",
-      "globs": ["**/*.js"],
-      "fallthrough": true
-    }
-  ],
+  "upload_source_maps": false,
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -28,8 +18,20 @@
   },
   "vars": {
     "DEPLOYMENT_MODE": "local",
-    "OURA_REDIRECT_URI": "http://localhost:8787/oauth/callback"
+    "OURA_REDIRECT_URI": "http://localhost:8787/oauth/callback",
+    "DASHBOARD_HOSTNAME": "localhost",
+    "WEBHOOK_HOSTNAME": "oura-hooks.localhost",
+    "ACCESS_TEAM_DOMAIN": "https://ronsanzone.cloudflareaccess.com",
+    "ACCESS_AUD": "local-development",
+    "ACCESS_ALLOWED_EMAIL": "local-development"
   },
+  "ratelimits": [
+    {
+      "name": "WEBHOOK_RATE_LIMITER",
+      "namespace_id": "84217001",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -48,8 +50,20 @@
       "preview_urls": false,
       "vars": {
         "DEPLOYMENT_MODE": "production",
-        "OURA_REDIRECT_URI": "https://oura.ronsanzone.dev/oauth/callback"
+        "OURA_REDIRECT_URI": "https://oura.ronsanzone.dev/oauth/callback",
+        "DASHBOARD_HOSTNAME": "oura.ronsanzone.dev",
+        "WEBHOOK_HOSTNAME": "oura-hooks.ronsanzone.dev",
+        "ACCESS_TEAM_DOMAIN": "https://ronsanzone.cloudflareaccess.com",
+        "ACCESS_AUD": "38b7d91be183fb3cec2f8a12f5096fc8e6314d8e1c7c7ddda467640fda0df2fe",
+        "ACCESS_ALLOWED_EMAIL": "ron.sanzone1@gmail.com"
       },
+      "ratelimits": [
+        {
+          "name": "WEBHOOK_RATE_LIMITER",
+          "namespace_id": "84217001",
+          "simple": { "limit": 60, "period": 60 }
+        }
+      ],
       "d1_databases": [
         {
           "binding": "DB",

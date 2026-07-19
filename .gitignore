@@ -3,12 +3,14 @@ __pycache__/
 *.py[cod]
 .env
 data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
 data/token.json
 .streamlit/secrets.toml
 node_modules/
 dist/
 .wrangler/
-worker-configuration.d.ts
 *.import.sql
 .dev.vars
 apps/dashboard-worker/.dev.vars

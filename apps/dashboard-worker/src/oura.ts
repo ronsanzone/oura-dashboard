@@ -1,6 +1,6 @@
 import { HttpError } from "./http.js"
 import { loadTokens, storeTokens, upsertRecords } from "./storage.js"
-import type { Env, StoredTokens } from "./types.js"
+import type { AppEnv, StoredTokens } from "./types.js"
 
 const API_ROOT = "https://api.ouraring.com/v2/usercollection"
 const TOKEN_URL = "https://api.ouraring.com/oauth/token"
@@ -21,7 +21,7 @@ export const endpoints: Record<string, string> = {
   vo2_max: "vO2_max"
 }
 
-const requireClient = (env: Env): { clientId: string; clientSecret: string } => {
+const requireClient = (env: AppEnv): { clientId: string; clientSecret: string } => {
   if (!env.OURA_CLIENT_ID || !env.OURA_CLIENT_SECRET) throw new HttpError(503, "oura_not_configured", "Oura OAuth is not configured")
   return { clientId: env.OURA_CLIENT_ID, clientSecret: env.OURA_CLIENT_SECRET }
 }
@@ -44,7 +44,7 @@ const parseTokenPayload = (payload: TokenPayload, fallbackRefresh?: string): Sto
   }
 }
 
-export const exchangeAuthorizationCode = async (env: Env, code: string): Promise<void> => {
+export const exchangeAuthorizationCode = async (env: AppEnv, code: string): Promise<void> => {
   const client = requireClient(env)
   const response = await fetch(TOKEN_URL, {
     method: "POST",
@@ -61,7 +61,7 @@ export const exchangeAuthorizationCode = async (env: Env, code: string): Promise
   await storeTokens(env, parseTokenPayload(await response.json<TokenPayload>()))
 }
 
-const refresh = async (env: Env, refreshToken: string): Promise<StoredTokens> => {
+const refresh = async (env: AppEnv, refreshToken: string): Promise<StoredTokens> => {
   const client = requireClient(env)
   const response = await fetch(TOKEN_URL, {
     method: "POST",
@@ -80,7 +80,7 @@ const refresh = async (env: Env, refreshToken: string): Promise<StoredTokens> =>
 }
 
 const collection = async (
-  env: Env,
+  env: AppEnv,
   endpoint: string,
   start: string,
   end: string,
@@ -111,7 +111,7 @@ const collection = async (
   return items
 }
 
-export const syncOura = async (env: Env, start: string, end: string): Promise<Record<string, unknown>> => {
+export const syncOura = async (env: AppEnv, start: string, end: string): Promise<Record<string, unknown>> => {
   const tokens = await loadTokens(env)
   if (!tokens) throw new HttpError(409, "oura_not_connected", "Connect the Oura account before syncing")
   const startedAt = new Date().toISOString()

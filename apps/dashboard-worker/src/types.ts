@@ -1,8 +1,4 @@
-export interface Env {
-  DB: D1Database
-  ASSETS: Fetcher
-  DEPLOYMENT_MODE: string
-  OURA_REDIRECT_URI: string
+export type AppEnv = Env & {
   OURA_CLIENT_ID?: string
   OURA_CLIENT_SECRET?: string
   OURA_TOKEN_ENCRYPTION_KEY?: string

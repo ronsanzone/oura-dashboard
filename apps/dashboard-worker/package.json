@@ -9,15 +9,16 @@
     "dev": "pnpm run build:ui && pnpm run build:worker && wrangler dev --local --port 8787",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "types": "wrangler types",
+    "types": "wrangler types src/worker-configuration.d.ts --include-runtime false",
     "deploy:dry-run:production": "pnpm run build:ui && pnpm run build:worker && wrangler deploy --env production --strict --dry-run"
   },
   "dependencies": {
-    "@oura/shared": "workspace:*"
+    "@oura/shared": "workspace:*",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.17",
-    "@cloudflare/workers-types": "^5.20260718.1",
+    "@cloudflare/workers-types": "^5.20260719.1",
     "typescript": "5.9.3",
     "vitest": "4.1.10",
     "wrangler": "4.112.0"
