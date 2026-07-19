@@ -1,0 +1,23 @@
+{
+  "name": "oura-observatory",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "build": "pnpm --filter @oura/dashboard-ui build && pnpm --filter @oura/dashboard-worker build:worker",
+    "dev": "pnpm --filter @oura/dashboard-worker dev",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "types": "pnpm --filter @oura/dashboard-worker types",
+    "deploy:dry-run:production": "pnpm --filter @oura/dashboard-worker deploy:dry-run:production"
+  },
+  "devDependencies": {
+    "@types/node": "25.0.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+  }
+}

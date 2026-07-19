@@ -1,0 +1,4 @@
+OURA_CLIENT_ID=your_client_id
+OURA_CLIENT_SECRET=your_client_secret
+OURA_TOKEN_ENCRYPTION_KEY=base64_encoded_32_byte_key
+OURA_WEBHOOK_VERIFICATION_TOKEN=random_verification_token

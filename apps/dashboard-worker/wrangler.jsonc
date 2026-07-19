@@ -1,0 +1,76 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oura-observatory-local",
+  "main": "dist/index.js",
+  "no_bundle": true,
+  "find_additional_modules": true,
+  "base_dir": "dist",
+  "preserve_file_names": true,
+  "rules": [
+    {
+      "type": "ESModule",
+      "globs": ["**/*.js"],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_date": "2026-07-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../dashboard-ui/dist",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "not_found_handling": "none",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 }
+  },
+  "vars": {
+    "DEPLOYMENT_MODE": "local",
+    "OURA_REDIRECT_URI": "http://localhost:8787/oauth/callback"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "oura-observatory-local",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 */6 * * *"]
+  },
+  "env": {
+    "production": {
+      "name": "oura-observatory",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        "DEPLOYMENT_MODE": "production",
+        "OURA_REDIRECT_URI": "https://oura.ronsanzone.dev/oauth/callback"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "oura-observatory",
+          "database_id": "d7761828-bc02-4f02-85ae-96d47eed6c15",
+          "migrations_dir": "../../migrations"
+        }
+      ],
+      "triggers": {
+        "crons": ["17 */6 * * *"]
+      },
+      "routes": [
+        {
+          "pattern": "oura.ronsanzone.dev",
+          "custom_domain": true
+        },
+        {
+          "pattern": "oura-hooks.ronsanzone.dev",
+          "custom_domain": true
+        }
+      ]
+    }
+  }
+}
