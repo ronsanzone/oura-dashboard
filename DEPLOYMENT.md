@@ -8,7 +8,10 @@ or detached accidentally.
 
 `https://oura-hooks.ronsanzone.dev/oura-webhook` is the only public ingress.
 It serves no dashboard assets or data APIs. GET challenges require the private
-verification token and POST events require Oura's HMAC signature.
+verification token and POST events require Oura's HMAC signature. Webhook
+events are recorded in D1, and delete events remove records immediately;
+create/update events are reconciled by the scheduled sync rather than starting
+a full API sync.
 The Worker also requires HTTPS, limits request bodies, rate-limits the public
 route, and deduplicates signed events in D1.
 
@@ -21,7 +24,7 @@ route, and deduplicates signed events in D1.
 - Access session: 8 hours; binding cookie and HttpOnly enabled; SameSite=Lax
 - Dashboard custom domain: `oura.ronsanzone.dev`
 - Webhook custom domain: `oura-hooks.ronsanzone.dev`
-- Cron reconciliation: every six hours at minute 17
+- Cron reconciliation: once daily at minute 17 past 03:00 UTC
 - Static UI: Worker `ASSETS` binding from `apps/dashboard-ui/dist`
 
 Production has `workers_dev=false` and `preview_urls=false` so neither can
@@ -40,6 +43,7 @@ pnpm --filter @oura/dashboard-worker exec wrangler whoami
 Apply migrations and import the existing local records:
 
 ```sh
+# Apply all migrations, including the sync lock used by the Worker.
 pnpm --filter @oura/dashboard-worker exec wrangler d1 migrations apply DB --env production --remote
 node scripts/export-d1-import.mjs
 pnpm --filter @oura/dashboard-worker exec wrangler d1 execute DB --env production --remote --file=.wrangler/oura-records.import.sql

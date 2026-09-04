@@ -8,6 +8,7 @@ import { reconcileOuraWebhooks, webhookDataTypeToRecordType } from "./webhooks.j
 
 const maxWebhookBodyBytes = 64 * 1024
 const maxSyncBodyBytes = 4 * 1024
+const routineSyncDays = 2
 const datePattern = /^\d{4}-\d{2}-\d{2}$/
 
 const pacificDate = (date: Date): string => new Intl.DateTimeFormat("en-CA", {
@@ -46,7 +47,7 @@ const enforceWebhookRateLimit = async (request: Request, env: AppEnv): Promise<v
   if (!success) throw new HttpError(429, "rate_limited", "Webhook request rate exceeded")
 }
 
-const webhook = async (request: Request, env: AppEnv, url: URL, ctx: ExecutionContext): Promise<Response> => {
+const webhook = async (request: Request, env: AppEnv, url: URL): Promise<Response> => {
   if (url.pathname === "/_health") return json({ ok: true, service: "oura-webhook", mode: env.DEPLOYMENT_MODE })
   if (url.pathname !== "/oura-webhook") throw new HttpError(404, "not_found", "Webhook route not found")
   await enforceWebhookRateLimit(request, env)
@@ -94,16 +95,11 @@ const webhook = async (request: Request, env: AppEnv, url: URL, ctx: ExecutionCo
       const recordType = webhookDataTypeToRecordType[event.data_type]
       if (recordType) await env.DB.prepare("DELETE FROM records WHERE data_type = ? AND record_id = ?")
         .bind(recordType, event.object_id).run()
-      await env.DB.prepare("UPDATE webhook_events SET processed_at = ? WHERE event_id = ?")
-        .bind(new Date().toISOString(), eventId).run()
-      return new Response("OK", { status: 200 })
     }
-    const end = new Date()
-    const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - 7)
-    ctx.waitUntil(syncOura(env, pacificDate(start), pacificDate(end))
-      .then(() => env.DB.prepare("UPDATE webhook_events SET processed_at = ? WHERE event_id = ?").bind(new Date().toISOString(), eventId).run())
-      .catch((error: unknown) => console.error("webhook sync failed", error)))
+    // Webhooks are event notifications. The scheduled sync coalesces create/update
+    // events instead of starting one full API sync per notification.
+    await env.DB.prepare("UPDATE webhook_events SET processed_at = ? WHERE event_id = ?")
+      .bind(new Date().toISOString(), eventId).run()
   }
   return new Response("OK", { status: 200 })
 }
@@ -148,7 +144,7 @@ const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> =
     defaultStart.setUTCDate(defaultStart.getUTCDate() - 90)
     const start = body.start ?? defaultStart.toISOString().slice(0, 10)
     validateDateRange(start, end)
-    return json(await syncOura(env, start, end))
+    return json(await syncOura(env, start, end, "manual"))
   }
   throw new HttpError(404, "not_found", "API route not found")
 }
@@ -202,7 +198,7 @@ export default {
       if (env.DEPLOYMENT_MODE === "production" && url.protocol !== "https:") {
         response = httpsRedirect(url)
       } else if (isWebhookHost) {
-        response = await webhook(request, env, url, ctx)
+        response = await webhook(request, env, url)
       } else if (!isDashboardHost) {
         throw new HttpError(404, "not_found", "Host not found")
       } else {
@@ -230,9 +226,9 @@ export default {
   async scheduled(_controller: ScheduledController, env: AppEnv, ctx: ExecutionContext): Promise<void> {
     const end = new Date()
     const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - 7)
+    start.setUTCDate(start.getUTCDate() - routineSyncDays)
     ctx.waitUntil(Promise.allSettled([
-      syncOura(env, pacificDate(start), pacificDate(end)),
+      syncOura(env, pacificDate(start), pacificDate(end), "scheduled"),
       reconcileOuraWebhooks(env)
     ]).then((results) => {
       for (const result of results) if (result.status === "rejected") console.error("scheduled task failed", result.reason)

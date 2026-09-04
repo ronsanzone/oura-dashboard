@@ -1,5 +1,5 @@
 import type { DatasetCount, ObservatoryStatus, OuraRecord } from "@oura/shared"
-import { decrypt, encrypt, sha256 } from "./crypto.js"
+import { decrypt, encrypt, randomState, sha256 } from "./crypto.js"
 import type { AppEnv, StoredTokens } from "./types.js"
 
 type RecordRow = {
@@ -91,6 +91,7 @@ export const upsertRecords = async (
         end_datetime = excluded.end_datetime,
         payload_json = excluded.payload_json,
         synced_at = excluded.synced_at
+      WHERE records.payload_json IS NOT excluded.payload_json
     `).bind(
       dataType,
       await recordId(dataType, item),
@@ -105,6 +106,32 @@ export const upsertRecords = async (
     await env.DB.batch(statements.slice(offset, offset + 75))
   }
   return statements.length
+}
+
+const syncLockName = "oura"
+const syncLockTtlMs = 30 * 60 * 1000
+
+export const acquireSyncLock = async (env: AppEnv): Promise<string | null> => {
+  const ownerToken = randomState()
+  const acquiredAt = new Date()
+  const expiresAt = new Date(acquiredAt.getTime() + syncLockTtlMs)
+  const row = await env.DB.prepare(`
+    INSERT INTO sync_locks (lock_name, owner_token, acquired_at, expires_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(lock_name) DO UPDATE SET
+      owner_token = excluded.owner_token,
+      acquired_at = excluded.acquired_at,
+      expires_at = excluded.expires_at
+    WHERE sync_locks.expires_at <= excluded.acquired_at
+    RETURNING owner_token
+  `).bind(syncLockName, ownerToken, acquiredAt.toISOString(), expiresAt.toISOString())
+    .first<{ owner_token: string }>()
+  return row?.owner_token === ownerToken ? ownerToken : null
+}
+
+export const releaseSyncLock = async (env: AppEnv, ownerToken: string): Promise<void> => {
+  await env.DB.prepare("DELETE FROM sync_locks WHERE lock_name = ? AND owner_token = ?")
+    .bind(syncLockName, ownerToken).run()
 }
 
 const requireEncryptionKey = (env: AppEnv): string => {

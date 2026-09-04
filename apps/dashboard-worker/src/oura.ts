@@ -1,5 +1,5 @@
 import { HttpError } from "./http.js"
-import { loadTokens, storeTokens, upsertRecords } from "./storage.js"
+import { acquireSyncLock, loadTokens, releaseSyncLock, storeTokens, upsertRecords } from "./storage.js"
 import type { AppEnv, StoredTokens } from "./types.js"
 
 const API_ROOT = "https://api.ouraring.com/v2/usercollection"
@@ -111,27 +111,46 @@ const collection = async (
   return items
 }
 
-export const syncOura = async (env: AppEnv, start: string, end: string): Promise<Record<string, unknown>> => {
+export type SyncTrigger = "manual" | "scheduled"
+
+export const syncOura = async (
+  env: AppEnv,
+  start: string,
+  end: string,
+  trigger: SyncTrigger
+): Promise<Record<string, unknown>> => {
   const tokens = await loadTokens(env)
   if (!tokens) throw new HttpError(409, "oura_not_connected", "Connect the Oura account before syncing")
+  const ownerToken = await acquireSyncLock(env)
+  if (!ownerToken) {
+    return { start, end, trigger, fetched: {}, skipped: { sync: "already_running" } }
+  }
   const startedAt = new Date().toISOString()
-  const log = await env.DB.prepare("INSERT INTO sync_log (started_at, status) VALUES (?, 'running') RETURNING id")
-    .bind(startedAt).first<{ id: number }>()
-  const synced: Record<string, number> = {}
-  const skipped: Record<string, string> = {}
+  try {
+    const log = await env.DB.prepare("INSERT INTO sync_log (started_at, status) VALUES (?, 'running') RETURNING id")
+      .bind(startedAt).first<{ id: number }>()
+    const fetched: Record<string, number> = {}
+    const skipped: Record<string, string> = {}
 
-  for (const [dataType, endpoint] of Object.entries(endpoints)) {
+    for (const [dataType, endpoint] of Object.entries(endpoints)) {
+      try {
+        const items = await collection(env, endpoint, start, end, tokens)
+        fetched[dataType] = await upsertRecords(env, dataType, items)
+      } catch (error) {
+        skipped[dataType] = error instanceof HttpError ? `HTTP ${error.status}` : "unexpected_error"
+      }
+    }
+    const result = { start, end, trigger, fetched, skipped }
+    if (log) {
+      await env.DB.prepare("UPDATE sync_log SET finished_at = ?, status = ?, details = ? WHERE id = ?")
+        .bind(new Date().toISOString(), Object.keys(fetched).length === 0 ? "failed" : "complete", JSON.stringify(result), log.id).run()
+    }
+    return result
+  } finally {
     try {
-      const items = await collection(env, endpoint, start, end, tokens)
-      synced[dataType] = await upsertRecords(env, dataType, items)
+      await releaseSyncLock(env, ownerToken)
     } catch (error) {
-      skipped[dataType] = error instanceof HttpError ? `HTTP ${error.status}` : "unexpected_error"
+      console.error("sync lock release failed", error)
     }
   }
-  const result = { start, end, synced, skipped }
-  if (log) {
-    await env.DB.prepare("UPDATE sync_log SET finished_at = ?, status = ?, details = ? WHERE id = ?")
-      .bind(new Date().toISOString(), Object.keys(synced).length === 0 ? "failed" : "complete", JSON.stringify(result), log.id).run()
-  }
-  return result
 }
