@@ -85,6 +85,22 @@ Deploy only after the Access application protects the dashboard hostname.
 
 ## Latest release
 
+- Released 2026-09-26: optional retrospective context review in Explore, from
+  [995796f](https://github.com/ronsanzone/oura-dashboard/commit/995796f).
+- Production version: `e04e8293-c357-401b-a927-b229d6988811` (100% traffic).
+- Deployment ID: `534874ab-d95f-4a92-82bb-b71db7af309a`.
+- Rollback version: `a915b8fd-58b3-460e-af91-4af6c7aa850f`.
+- No new migration needed; existing secrets/data and Access settings preserved.
+- Typecheck, all 36 tests and production dry-run passed. Local browser verified
+  real Jev classification, explicit consent, zero calls on open/copy/reuse,
+  accepted-history updates and retrospective provenance, plus desktop/narrow UI.
+- Production anonymous dashboard, asset, context GET and Jev POST redirect to
+  Access. Webhook-host data endpoints return 404; health returns 200.
+  workers.dev and preview URLs remain disabled. Owner-session production
+  acceptance remains pending; no production health records were accessed.
+
+### Initial Jev release
+
 - Released 2026-09-26: Jev Daily Debrief, Experiment Concierge, Signal Detective
   and collapsed session debug panel. Ron explicitly approved deployment.
 - Production version: `a915b8fd-58b3-460e-af91-4af6c7aa850f` (100% traffic).
