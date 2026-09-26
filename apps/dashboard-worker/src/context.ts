@@ -33,6 +33,7 @@ export async function contextApi(request: Request, env: AppEnv, url: URL): Promi
   let body
   try { body = validateContextSave(JSON.parse(text)) } catch (error) { throw new HttpError(400, "invalid_context", error instanceof Error ? error.message : "Invalid context") }
   const proposal = await contextProposal(env, body.proposalId)
+  if (proposal.reviewDay && proposal.reviewDay !== day) throw new HttpError(400, "invalid_review_day", "This retrospective proposal belongs to a different day")
   const savedAt = new Date().toISOString()
   const result = await env.DB.prepare("INSERT INTO context_revisions (day, version, proposal_id, labels_json, reason, saved_at) SELECT ?, ?, ?, ?, ?, ? WHERE COALESCE((SELECT MAX(version) FROM context_revisions WHERE day = ?), 0) = ?")
     .bind(day, body.version + 1, proposal.id, JSON.stringify(body.labels), body.reason, savedAt, day, body.version).run()

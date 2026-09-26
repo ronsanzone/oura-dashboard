@@ -2,7 +2,7 @@ import { sha256 } from "./crypto.js"
 import { HttpError, json, readBoundedText } from "./http.js"
 import { requireSameOrigin } from "./security.js"
 import type { AppEnv } from "./types.js"
-import { contextTopics, contextLabels as labels, selectFollowUps, type ContextLabel, type ContextProposal, type ContextTopic, type ChoiceAnswer } from "@oura/shared/context"
+import { contextTopics, contextLabels as labels, selectFollowUps, validContextDay, type ContextLabel, type ContextProposal, type ContextTopic, type ChoiceAnswer } from "@oura/shared/context"
 import { adherenceStates, type Experiment, type Adherence } from "@oura/shared/experiments"
 
 const model = "typesafe/jev"
@@ -42,7 +42,7 @@ export const jevApi = async (request: Request, env: AppEnv): Promise<Response> =
   let body: unknown
   const text = await readBoundedText(request, 8192)
   try { body = JSON.parse(text) } catch { throw new HttpError(400, "invalid_json", "Body must be valid JSON") }
-  if (!object(body) || Object.keys(body).some(key => !["note", "consent", "responses", "medications", "experiment"].includes(key)) ||
+  if (!object(body) || Object.keys(body).some(key => !["note", "consent", "responses", "medications", "experiment", "reviewDay"].includes(key)) ||
     typeof body.note !== "string" || !body.note.trim() || body.note.length > 4000) {
     throw new HttpError(400, "invalid_note", "Submit a note of 1–4000 characters, consent and optional interview answers")
   }
@@ -50,6 +50,7 @@ export const jevApi = async (request: Request, env: AppEnv): Promise<Response> =
     throw new HttpError(400, "consent_required", "Explicit consent to send this note to Cloudflare Workers AI is required")
   }
   const responses = body.responses ?? {}
+  if (body.reviewDay !== undefined && (typeof body.reviewDay !== "string" || !validContextDay(body.reviewDay) || body.experiment !== undefined)) throw new HttpError(400, "invalid_review_day", "Choose an elapsed date for a context-only review")
   if (!object(responses) || Object.keys(responses).length > 2 || Object.entries(responses).some(([key, value]) => !Object.hasOwn(contextTopics, key) || typeof value !== "string" || value.length > 500) ||
     (body.medications !== undefined && typeof body.medications !== "boolean")) throw new HttpError(400, "invalid_answers", "Use up to two short answers to the provided questions")
   const input = { note: body.note, responses: responses as ContextProposal["input"]["responses"] }
@@ -93,6 +94,7 @@ export const jevApi = async (request: Request, env: AppEnv): Promise<Response> =
     scope: "stated_period_only", answers, usage: { input_tokens, output_tokens },
     estimatedInputCostUsd: Number(input_tokens) * 0.042 / 1_000_000,
     input, followUps: selectFollowUps(answers, Object.keys(responses), body.medications === true),
+    ...(body.reviewDay ? { reviewDay: body.reviewDay } : {}),
     ...(experiment ? { experiment, adherence } : {}) } as ContextProposal
   await env.DB.prepare("INSERT INTO context_proposals (id, document_json, created_at) VALUES (?, ?, ?)").bind(proposal.id, JSON.stringify(proposal), proposal.createdAt).run()
   return json({ ...proposal, debug: { model, input: providerInput } })

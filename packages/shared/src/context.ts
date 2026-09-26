@@ -26,6 +26,7 @@ export type ContextProposal = {
   answers: Record<ContextTopic, ChoiceAnswer<ContextLabel>>;
   usage: { input_tokens: number; output_tokens: number }; estimatedInputCostUsd: number;
   followUps: ContextTopic[]; input: { note: string; responses: Partial<Record<ContextTopic, string>> };
+  reviewDay?: string; // Retrospective Explore review; provenance only, never model input.
   experiment?: { id: string; version: number }; adherence?: ChoiceAnswer<Adherence>;
 }
 export type ContextRevision = { day: string; version: number; savedAt: string; proposal: ContextProposal; labels: ContextLabels; reason: string }

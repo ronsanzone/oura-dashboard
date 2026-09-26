@@ -70,7 +70,7 @@ export async function experimentsApi(request: Request, env: AppEnv, url: URL): P
   if (id) await latest(env, id)
   let experiment
   try { experiment = validateExperiment(body.experiment, localDay(new Date())) } catch (error) { throw new HttpError(400, "invalid_experiment", error instanceof Error ? error.message : "Invalid experiment") }
-  const receipt = (p: ContextProposal) => ({ id: p.id, model: p.model, rubricVersion: p.rubricVersion, sourceHash: p.sourceHash, createdAt: p.createdAt })
+  const receipt = (p: ContextProposal) => ({ id: p.id, model: p.model, rubricVersion: p.rubricVersion, sourceHash: p.sourceHash, createdAt: p.createdAt, ...(p.reviewDay ? { reviewDay: p.reviewDay } : {}) })
   for (const c of Object.values(experiment.checkIns)) {
     delete c.provenance // Reconstruct from immutable server records, never trust submitted receipts.
     if (c.context) {

@@ -85,6 +85,26 @@ describe("context and concierge (mock inference, real persistence)", () => {
     expect((await request(`/api/experiments/${revision.id}`, { version: 2, experiment }, "PUT")).status).toBe(400)
     expect((await request("/api/jev/classify", input)).status).toBe(409)
   })
+  it("keeps retrospective provenance out of Jev input, binds acceptance to its day and reuses saved context without inference", async () => {
+    const { request, run } = setup()
+    const input = { note: "Worked after dinner", consent: true, reviewDay: "2026-03-08" }
+    const p = await (await request("/api/jev/classify", input)).json() as ContextProposal
+    expect(p.reviewDay).toBe("2026-03-08")
+    expect(run.mock.calls[0]![1].state).toEqual({ note: input.note })
+    expect(JSON.stringify(run.mock.calls[0]![1])).not.toContain(input.reviewDay)
+    const save = { version: 0, proposalId: p.id, labels: proposedLabels(p), reason: "Retrospective review" }
+    expect((await request("/api/context/2026-03-09", save, "PUT")).status).toBe(400)
+    expect((await request("/api/context/2026-03-08", save, "PUT")).status).toBe(200)
+    expect((await (await request("/api/context/2026-03-08/revisions")).json() as ContextRevision[])[0]!.proposal.reviewDay).toBe(input.reviewDay)
+    const notebook = await (await request("/api/experiments", { experiment: plan })).json() as ExperimentRevision
+    await request(`/api/experiments/${notebook.id}`, { version: 1, experiment: { ...plan, checkIns: { "2026-03-08": { adherence: "unknown", note: "", exclusion: "", context: { day: input.reviewDay, version: 1 } } } } }, "PUT")
+    const snapshot = await (await request(`/api/experiments/${notebook.id}/snapshots`, { version: 2 })).json()
+    expect(JSON.stringify(snapshot)).toContain('"reviewDay":"2026-03-08"')
+    for (const extra of [{ reviewDay: "2026-02-30" }, { reviewDay: "2999-01-01" }, { elevated: true }, { stressHours: 4 }, { experiment: { id: notebook.id, version: 2 } }]) {
+      expect((await request("/api/jev/classify", { ...input, ...extra })).status).toBe(400)
+    }
+    expect(run).toHaveBeenCalledTimes(1)
+  })
   it("requires Access for saved context even when inference is off", async () => {
     const { env, request } = setup()
     env.JEV_ENABLED = "false"

@@ -21,7 +21,7 @@ export type ExperimentMetric = keyof typeof experimentMetrics
 export const adherenceStates = ["followed", "partly", "not_followed", "unknown"] as const
 export type Adherence = typeof adherenceStates[number]
 export const adherenceLabels: Record<Adherence, string> = { followed: "Followed", partly: "Partly followed", not_followed: "Not followed", unknown: "Unknown" }
-export type ClassificationReceipt = Pick<ContextProposal, "id" | "model" | "rubricVersion" | "sourceHash" | "createdAt">
+export type ClassificationReceipt = Pick<ContextProposal, "id" | "model" | "rubricVersion" | "sourceHash" | "createdAt" | "reviewDay">
 export type CheckIn = { adherence: Adherence; note: string; exclusion: string;
   context?: { day: string; version: number }; classificationId?: string;
   provenance?: { context?: { labels: ContextLabels; source: ClassificationReceipt }; adherence?: { proposed: Adherence; source: ClassificationReceipt; planVersion: number } } }
