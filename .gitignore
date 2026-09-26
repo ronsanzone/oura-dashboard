@@ -14,3 +14,4 @@ dist/
 *.import.sql
 .dev.vars
 apps/dashboard-worker/.dev.vars
+.amp/portals/*

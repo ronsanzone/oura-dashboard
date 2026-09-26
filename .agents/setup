@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "Installing pnpm workspace dependencies..."
+if ! command -v pnpm >/dev/null 2>&1; then
+  corepack enable
+fi
+time corepack pnpm install --frozen-lockfile
+
+echo "Installing Python dashboard dependencies..."
+if [[ ! -d .venv ]]; then
+  python3 -m venv .venv
+fi
+time uv pip install --python .venv/bin/python -r requirements.txt

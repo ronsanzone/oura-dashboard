@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dependencies are restored from the orb snapshot; no reconnect or login is needed.
