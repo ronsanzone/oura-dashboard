@@ -1,4 +1,5 @@
 import { buildDailyPoints, localDay, shiftDay, type DailyPoint, type OuraRecord } from "./index"
+import type { ContextLabels, ContextProposal } from "./context"
 
 export const experimentMetrics = {
   sleepEfficiency: ["Sleep efficiency", "%", "percentage points"],
@@ -20,7 +21,10 @@ export type ExperimentMetric = keyof typeof experimentMetrics
 export const adherenceStates = ["followed", "partly", "not_followed", "unknown"] as const
 export type Adherence = typeof adherenceStates[number]
 export const adherenceLabels: Record<Adherence, string> = { followed: "Followed", partly: "Partly followed", not_followed: "Not followed", unknown: "Unknown" }
-export type CheckIn = { adherence: Adherence; note: string; exclusion: string }
+export type ClassificationReceipt = Pick<ContextProposal, "id" | "model" | "rubricVersion" | "sourceHash" | "createdAt">
+export type CheckIn = { adherence: Adherence; note: string; exclusion: string;
+  context?: { day: string; version: number }; classificationId?: string;
+  provenance?: { context?: { labels: ContextLabels; source: ClassificationReceipt }; adherence?: { proposed: Adherence; source: ClassificationReceipt; planVersion: number } } }
 export type Experiment = {
   question: string; habit: string; primary: ExperimentMetric; supporting: ExperimentMetric[];
   rules: { followed: string; partly: string; not_followed: string };
@@ -54,6 +58,8 @@ export function validateExperiment(value: unknown, today = localDay(new Date()))
     const inWindow = (day >= e.beforeStart && day <= e.beforeEnd) || (day >= e.start && day <= e.end) || (e.afterStart && day >= e.afterStart && day <= e.afterEnd)
     if (!validExperimentDay(day) || !inWindow || day > today || !c || !adherenceStates.includes(c.adherence) || !text(c.note, 2000) || !text(c.exclusion, 500)) fail("Check-ins must be valid elapsed days inside your windows. Preserve logged days when revising dates.")
     if (c.exclusion && !c.exclusion.trim()) fail("An exclusion needs a visible reason, not whitespace. Clear the field to include the day.")
+    if (c.context && (c.context.day !== day || !Number.isSafeInteger(c.context.version) || c.context.version < 1)) fail("Context must reference a saved revision for this exposure day.")
+    if (c.classificationId !== undefined && (typeof c.classificationId !== "string" || !/^[a-f0-9-]{36}$/.test(c.classificationId))) fail("Invalid classification provenance.")
     if ((day < e.start || day > e.end) && c.adherence !== "unknown") fail("Adherence applies to During days only; Before/After support notes and exclusions.")
   }
   return e

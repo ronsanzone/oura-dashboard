@@ -3,6 +3,8 @@ import { experimentEvidence, validateExperiment, type ExperimentRevision, type E
 import { HttpError, json, readBoundedText } from "./http.js"
 import { requireSameOrigin } from "./security.js"
 import { records } from "./storage.js"
+import { contextProposal } from "./context.js"
+import type { ContextProposal } from "@oura/shared/context"
 import type { AppEnv } from "./types.js"
 
 type Row = { experiment_id: string; version: number; document_json: string; saved_at: string }
@@ -68,6 +70,20 @@ export async function experimentsApi(request: Request, env: AppEnv, url: URL): P
   if (id) await latest(env, id)
   let experiment
   try { experiment = validateExperiment(body.experiment, localDay(new Date())) } catch (error) { throw new HttpError(400, "invalid_experiment", error instanceof Error ? error.message : "Invalid experiment") }
+  const receipt = (p: ContextProposal) => ({ id: p.id, model: p.model, rubricVersion: p.rubricVersion, sourceHash: p.sourceHash, createdAt: p.createdAt })
+  for (const c of Object.values(experiment.checkIns)) {
+    delete c.provenance // Reconstruct from immutable server records, never trust submitted receipts.
+    if (c.context) {
+      const row = await env.DB.prepare("SELECT labels_json, proposal_id FROM context_revisions WHERE day = ? AND version = ?").bind(c.context.day, c.context.version).first<{ labels_json: string; proposal_id: string }>()
+      if (!row) throw new HttpError(400, "invalid_context", "Saved context revision not found")
+      c.provenance = { context: { labels: JSON.parse(row.labels_json), source: receipt(await contextProposal(env, row.proposal_id)) } }
+    }
+    if (c.classificationId) {
+      const proposal = await contextProposal(env, c.classificationId)
+      if (!id || proposal.experiment?.id !== id || !proposal.adherence || proposal.input.note !== c.note) throw new HttpError(400, "invalid_provenance", "Classification must match this notebook and the unchanged note. Reclassify after editing.")
+      c.provenance = { ...c.provenance, adherence: { proposed: proposal.adherence.choice, source: receipt(proposal), planVersion: proposal.experiment.version } }
+    }
+  }
   const savedAt = new Date().toISOString(), experimentId = id ?? crypto.randomUUID()
   // Single atomic conditional insert: stale tabs cannot overwrite newer check-ins or plans.
   const result = await env.DB.prepare("INSERT INTO experiment_revisions (experiment_id, version, document_json, saved_at) SELECT ?, ?, ?, ? WHERE COALESCE((SELECT MAX(version) FROM experiment_revisions WHERE experiment_id = ?), 0) = ?")

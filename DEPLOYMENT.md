@@ -85,6 +85,24 @@ Deploy only after the Access application protects the dashboard hostname.
 
 ## Latest release
 
+- Released 2026-09-26: Jev Daily Debrief, Experiment Concierge, Signal Detective
+  and collapsed session debug panel. Ron explicitly approved deployment.
+- Production version: `a915b8fd-58b3-460e-af91-4af6c7aa850f` (100% traffic).
+- Deployment ID: `b68f80d2-5764-446a-87fd-3b5f58c2c794`.
+- Rollback version: `13a0d90c-ac62-4dec-a2bf-41faf7c8a352`.
+- Migration `0004_context.sql` applied; no pending migrations.
+- `JEV_ENABLED=true`; AI binding and six-request/minute limiter installed.
+- Existing secrets preserved; no imports, Access changes or health-record reads.
+- Anonymous dashboard, asset, context and Jev requests redirect to Access;
+  anonymous Jev POST also redirects to the correct Access hostname. Public
+  webhook context/Jev routes return 404; webhook health returns 200. HTTP
+  redirects to HTTPS; workers.dev and preview URLs verified disabled.
+- Typecheck, all 35 tests and production dry-run passed. Real Jev and visual
+  checks passed locally; authenticated production acceptance requires Ron's
+  Access session.
+
+### Previous release
+
 - Released 2026-09-26 from [1731d35](https://github.com/ronsanzone/oura-dashboard/commit/1731d35): Observatory overhaul and manual Experiment Lab.
 - Production version: `13a0d90c-ac62-4dec-a2bf-41faf7c8a352` (100% traffic).
 - Deployment ID: `3a65334b-742f-44a2-9556-41da79d468ca`.
@@ -96,6 +114,25 @@ Deploy only after the Access application protects the dashboard hostname.
   HTTP redirects to HTTPS; workers.dev and preview URLs remain disabled.
 - Authenticated owner UI/data verification remains to be performed through
   the owner's Access session. No production health records were read for this release.
+
+## Jev operation and retention
+
+Daily Debrief and optional Experiment Concierge require migration
+`0004_context.sql`, the `AI` binding, and `JEV_RATE_LIMITER`. `JEV_ENABLED`
+is enabled in production after Ron's deployment approval; local configuration
+defaults to false. Set production to false and redeploy to disable inference.
+Existing manual notebooks remain usable
+without making inference calls. The Cloudflare account needs Workers AI
+permissions and funded AI Gateway inference (or separately configured BYOK).
+
+Classification sends only consented text/answers and, for concierge, the
+declared habit and adherence rules. It stores source text and immutable model
+proposals in D1, including unaccepted proposals. No automatic retention or
+deletion job exists. Deployment retains this disclosed behavior. Never run
+the local-mode live-inference server behind a public portal because local mode
+bypasses Access. The debug panel retains only ten calls in browser memory and
+does not persist debug metadata. See `research/jev/README.md` for API contracts
+and the local verification workflow.
 
 ## Verification
 

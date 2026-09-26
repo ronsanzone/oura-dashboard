@@ -1,4 +1,5 @@
-export type AppEnv = Env & {
+export type AppEnv = Omit<Env, "JEV_ENABLED"> & {
+  JEV_ENABLED: string
   OURA_CLIENT_ID?: string
   OURA_CLIENT_SECRET?: string
   OURA_TOKEN_ENCRYPTION_KEY?: string

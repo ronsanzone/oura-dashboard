@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./experiments": "./src/experiments.ts"
+    "./experiments": "./src/experiments.ts",
+    "./context": "./src/context.ts",
+    "./signals": "./src/signals.ts"
   },
   "scripts": {
     "test": "vitest run",

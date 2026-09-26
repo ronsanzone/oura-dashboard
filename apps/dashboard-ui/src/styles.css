@@ -184,7 +184,41 @@ footer { display: flex; justify-content: space-between; gap: 20px; font-size: 11
 .experiment-lab .panel > label { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .experiment-lab .lab-form > label { display: grid; }
 .experiment-lab pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.daily-debrief { max-width: 1080px; margin-inline: auto; }
+.app-shell:has(.daily-debrief) .date-controls { display: none; }
+.debrief-date { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; margin-bottom: 28px; color: var(--muted); }
+.debrief-layout { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr); gap: 42px; align-items: start; }
+.daily-debrief h2 { font-family: Georgia, serif; font-size: 30px; font-weight: 400; margin: 0; }
+.debrief-capture { border-top: 2px solid #df9850; padding: 30px; gap: 16px; }
+.debrief-capture p { margin: 0; }
+.debrief-capture textarea { min-height: 150px; }
+.daily-debrief .lab-form input:not([type=checkbox]) { border: 1px solid var(--line); background: #211b20; color: #fff4d8; border-radius: 6px; min-height: 44px; padding: 10px 12px; }
+.debrief-aside { padding: 25px 0; }
+.debrief-aside h2 { line-height: 1.3; margin: 18px 0 28px; }
+.debrief-aside dl { border-top: 1px solid var(--line); padding-top: 22px; }
+.debrief-aside dt { color: #9eb8b2; margin-top: 15px; }
+.debrief-aside dd { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.debrief-permissions { display: grid; gap: 12px; padding-top: 15px; border-top: 1px solid var(--line); }
+.debrief-permissions label { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.6; }
+.debrief-permissions input { width: 18px; min-height: 18px; height: 18px; flex-shrink: 0; accent-color: #df9850; margin-top: 3px; }
+.context-status { display: block; margin-top: 28px; font-size: 11px; letter-spacing: .08em; color: #df9850; }
+.daily-debrief > div > .panel { margin-top: 28px; }
+.context-review h2 { margin-top: 14px; }
+.context-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 25px 0; }
+.context-item { padding: 16px; background: #211b20; border: 1px solid var(--line); border-top: 2px solid #796b67; border-radius: 6px; }
+.context-item.is-present { border-top-color: #df9850; }.context-item.is-absent { border-top-color: #9eb8b2; }.context-item.is-conflicting { border-top-color: #c98c97; }
+.context-item label { display: grid; gap: 12px; }.context-item select { width: 100%; min-width: 0; }
+.context-item .caption { display: block; margin-top: 10px; font-size: 11px; }
+.context-source { padding-block: 16px; overflow-wrap: anywhere; }.source-note { white-space: pre-wrap; }
+.context-notice { border-left: 2px solid #9eb8b2; padding: 12px 18px; background: #252c2c; }
+.lab-concierge { padding: 20px; background: #211b20; border: 1px solid var(--line); border-radius: 6px; }
+.lab-concierge h3 { margin-top: 0; }.lab-concierge .lab-actions { margin-bottom: 0; }
+.jev-debug { margin-top: 36px; }
+.jev-debug pre { max-height: 440px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px; background: #211b20; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; line-height: 1.6; }
 @media (max-width: 700px) {
+  .debrief-layout { grid-template-columns: 1fr; gap: 10px; }.debrief-capture { padding: 20px; }
+  .debrief-aside { padding: 18px 4px; }.debrief-aside dl { display: grid; grid-template-columns: 85px 1fr; gap: 12px; }
+  .debrief-aside dt, .debrief-aside dd { margin: 0; }.context-grid { grid-template-columns: 1fr; }
   .lab-form-grid, .lab-checks { grid-template-columns: 1fr; }
   .lab-form fieldset { padding: 14px; }
   .lab-periods { grid-template-columns: 1fr; }

@@ -5,6 +5,8 @@ import { exchangeAuthorizationCode, syncOura } from "./oura.js"
 import { requireAccessIdentity, requireSameOrigin, secureResponse } from "./security.js"
 import { records, status } from "./storage.js"
 import { experimentsApi } from "./experiments.js"
+import { jevApi } from "./jev.js"
+import { contextApi } from "./context.js"
 import type { AppEnv } from "./types.js"
 import { reconcileOuraWebhooks, webhookDataTypeToRecordType } from "./webhooks.js"
 
@@ -107,6 +109,8 @@ const serveAsset = (request: Request, env: AppEnv): Promise<Response> => {
 }
 
 const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> => {
+  if (url.pathname === "/api/jev/classify") return jevApi(request, env)
+  if (url.pathname === "/api/context" || url.pathname.startsWith("/api/context/")) return contextApi(request, env, url)
   if (url.pathname === "/api/experiments" || url.pathname.startsWith("/api/experiments/")) return experimentsApi(request, env, url)
   if (url.pathname === "/api/status" && request.method === "GET") return json(await status(env))
   if (url.pathname === "/api/records" && request.method === "GET") {
