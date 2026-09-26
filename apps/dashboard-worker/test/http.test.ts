@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest"
 import { errorResponse, HttpError, json, readBoundedText } from "../src/http.js"
 import { requireSameOrigin, secureResponse } from "../src/security.js"
+import worker from "../src/index.js"
+import type { AppEnv } from "../src/types.js"
 
 describe("HTTP responses", () => {
+  it("protects production UI and both read APIs before touching storage", async () => {
+    const env = { DEPLOYMENT_MODE: "production", DASHBOARD_HOSTNAME: "oura.example" } as unknown as AppEnv
+    for (const path of ["/", "/api/status", "/api/records"]) {
+      const response = await worker.fetch(new Request(`https://oura.example${path}`), env, {} as ExecutionContext)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ error: "access_denied" })
+    }
+  })
+
   it("returns private JSON with security headers", async () => {
     const response = json({ ok: true })
     expect(response.headers.get("content-type")).toContain("application/json")

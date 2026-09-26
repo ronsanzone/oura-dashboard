@@ -4,7 +4,8 @@
   "version": "0.2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./experiments": "./src/experiments.ts"
   },
   "scripts": {
     "test": "vitest run",

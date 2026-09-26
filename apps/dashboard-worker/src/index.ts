@@ -1,8 +1,10 @@
 import { constantTimeEqual, randomState, sha256 } from "./crypto.js"
+import { localDay } from "@oura/shared"
 import { errorResponse, HttpError, json, readBoundedText } from "./http.js"
 import { exchangeAuthorizationCode, syncOura } from "./oura.js"
 import { requireAccessIdentity, requireSameOrigin, secureResponse } from "./security.js"
 import { records, status } from "./storage.js"
+import { experimentsApi } from "./experiments.js"
 import type { AppEnv } from "./types.js"
 import { reconcileOuraWebhooks, webhookDataTypeToRecordType } from "./webhooks.js"
 
@@ -10,13 +12,6 @@ const maxWebhookBodyBytes = 64 * 1024
 const maxSyncBodyBytes = 4 * 1024
 const routineSyncDays = 2
 const datePattern = /^\d{4}-\d{2}-\d{2}$/
-
-const pacificDate = (date: Date): string => new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/Los_Angeles",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit"
-}).format(date)
 
 const validDate = (value: string): boolean => {
   if (!datePattern.test(value)) return false
@@ -112,6 +107,7 @@ const serveAsset = (request: Request, env: AppEnv): Promise<Response> => {
 }
 
 const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> => {
+  if (url.pathname === "/api/experiments" || url.pathname.startsWith("/api/experiments/")) return experimentsApi(request, env, url)
   if (url.pathname === "/api/status" && request.method === "GET") return json(await status(env))
   if (url.pathname === "/api/records" && request.method === "GET") {
     const start = url.searchParams.get("start") ?? undefined
@@ -121,7 +117,9 @@ const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> =
       throw new HttpError(400, "invalid_date", "Dates must use YYYY-MM-DD")
     }
     if (start && end) validateDateRange(start, end)
-    return json(await records(env, { start, end, type }))
+    const offset = Number(url.searchParams.get("offset") ?? 0)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, "invalid_offset", "Offset must be a non-negative integer")
+    return json(await records(env, { start, end, type, offset }))
   }
   if (url.pathname === "/api/sync" && request.method === "POST") {
     requireSameOrigin(request)
@@ -138,7 +136,7 @@ const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> =
     if (!body || typeof body !== "object") throw new HttpError(400, "invalid_body", "Sync body must be a JSON object")
     if (body.start !== undefined && typeof body.start !== "string") throw new HttpError(400, "invalid_date", "Start date must use YYYY-MM-DD")
     if (body.end !== undefined && typeof body.end !== "string") throw new HttpError(400, "invalid_date", "End date must use YYYY-MM-DD")
-    const end = body.end ?? pacificDate(new Date())
+    const end = body.end ?? localDay(new Date())
     const defaultStart = new Date(`${end}T00:00:00Z`)
     if (Number.isNaN(defaultStart.getTime())) throw new HttpError(400, "invalid_date", "End date must use YYYY-MM-DD")
     defaultStart.setUTCDate(defaultStart.getUTCDate() - 90)
@@ -228,7 +226,7 @@ export default {
     const start = new Date(end)
     start.setUTCDate(start.getUTCDate() - routineSyncDays)
     ctx.waitUntil(Promise.allSettled([
-      syncOura(env, pacificDate(start), pacificDate(end), "scheduled"),
+      syncOura(env, localDay(start), localDay(end), "scheduled"),
       reconcileOuraWebhooks(env)
     ]).then((results) => {
       for (const result of results) if (result.status === "rejected") console.error("scheduled task failed", result.reason)

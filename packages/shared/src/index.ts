@@ -24,6 +24,44 @@ export type ObservatoryStatus = {
   last_date: string | null
   last_sync: string | null
   datasets: DatasetCount[]
+  sync?: { started_at: string; finished_at: string | null; status: string; skipped: Record<string, string> } | null
+  scopes?: string[]
+}
+
+export const timeZone = "America/New_York"
+export const localDay = (date: Date): string => new Intl.DateTimeFormat("en-CA", {
+  timeZone, year: "numeric", month: "2-digit", day: "2-digit"
+}).format(date)
+
+export const shiftDay = (day: string, days: number): string => {
+  const date = new Date(`${day}T12:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+// Resolve midnight in the account timezone, including both DST transitions.
+export const dayStart = (day: string): string => {
+  const midnight = Date.parse(`${day}T00:00:00Z`)
+  let instant = midnight
+  for (let i = 0; i < 3; i++) {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(instant))
+    const get = (key: string) => parts.find((part) => part.type === key)?.value
+    const wall = Date.parse(`${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}Z`)
+    instant += midnight - wall
+  }
+  return new Date(instant).toISOString()
+}
+
+export type RecordsPage = { records: OuraRecord[]; nextOffset: number | null }
+
+export const mainSleep = (records: readonly OuraRecord[]): OuraRecord | undefined =>
+  records.filter((record) => record.data_type === "sleep").reduce<OuraRecord | undefined>((best, record) =>
+    !best || Number(record.payload.total_sleep_duration ?? 0) > Number(best.payload.total_sleep_duration ?? 0) ? record : best, undefined)
+
+export const baselineFor = (points: readonly DailyPoint[], day: string, key: keyof DailyPoint) => {
+  const values = points.filter((point) => point.day >= shiftDay(day, -28) && point.day < day)
+    .map((point) => point[key]).filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+  return { count: values.length, mean: values.length >= 7 ? mean(values) : undefined }
 }
 
 export type DailyPoint = {
@@ -55,6 +93,7 @@ export type DailyPoint = {
   breathingDisturbanceIndex?: number
   vascularAge?: number
   pulseWaveVelocity?: number
+  vo2Max?: number
   [key: `sleepContributor.${string}`]: number | undefined
   [key: `readinessContributor.${string}`]: number | undefined
   [key: `activityContributor.${string}`]: number | undefined
@@ -114,6 +153,8 @@ export const buildDailyPoints = (records: readonly OuraRecord[]): DailyPoint[] =
     } else if (record.data_type === "cardiovascular_age") {
       point.vascularAge = numberAt(payload.vascular_age)
       point.pulseWaveVelocity = numberAt(payload.pulse_wave_velocity)
+    } else if (record.data_type === "vo2_max") {
+      point.vo2Max = numberAt(payload.vo2_max)
     } else if (record.data_type === "sleep") {
       const existing = sleepCandidates.get(day)
       const duration = numberAt(payload.total_sleep_duration) ?? 0

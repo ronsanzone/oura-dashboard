@@ -1,4 +1,5 @@
 import { HttpError } from "./http.js"
+import { dayStart, shiftDay } from "@oura/shared"
 import { acquireSyncLock, loadTokens, releaseSyncLock, storeTokens, upsertRecords } from "./storage.js"
 import type { AppEnv, StoredTokens } from "./types.js"
 
@@ -79,16 +80,29 @@ const refresh = async (env: AppEnv, refreshToken: string): Promise<StoredTokens>
   return tokens
 }
 
-const collection = async (
+export const collection = async (
   env: AppEnv,
   endpoint: string,
   start: string,
   end: string,
   originalTokens: StoredTokens
 ): Promise<Record<string, unknown>[]> => {
+  // Bound high-volume HR requests; 28 calendar days also stay below 30 elapsed
+  // days across DST. Pagination still applies within each chunk.
+  if (endpoint === "heartrate" && shiftDay(start, 27) < end) {
+    const items: Record<string, unknown>[] = []
+    for (let cursor = start; cursor <= end; cursor = shiftDay(cursor, 28)) {
+      const chunkEnd = shiftDay(cursor, 27) < end ? shiftDay(cursor, 27) : end
+      items.push(...await collection(env, endpoint, cursor, chunkEnd, originalTokens))
+    }
+    return items
+  }
   let tokens = originalTokens
   let url = `${API_ROOT}/${endpoint}`
-  let params = new URLSearchParams({ start_date: start, end_date: end })
+  const range: Record<string, string> = endpoint === "heartrate"
+    ? { start_datetime: dayStart(start), end_datetime: dayStart(shiftDay(end, 1)) }
+    : { start_date: start, end_date: end }
+  const params = new URLSearchParams(range)
   const items: Record<string, unknown>[] = []
   let refreshed = false
 
@@ -96,6 +110,7 @@ const collection = async (
     let response = await fetch(`${url}?${params}`, { headers: { authorization: `Bearer ${tokens.accessToken}` } })
     if (response.status === 401 && !refreshed) {
       tokens = await refresh(env, tokens.refreshToken)
+      Object.assign(originalTokens, tokens)
       refreshed = true
       response = await fetch(`${url}?${params}`, { headers: { authorization: `Bearer ${tokens.accessToken}` } })
     }
@@ -103,7 +118,7 @@ const collection = async (
     const payload = await response.json<{ data?: Record<string, unknown>[]; next_token?: string }>()
     items.push(...(payload.data ?? []))
     if (payload.next_token) {
-      params = new URLSearchParams({ next_token: payload.next_token })
+      params.set("next_token", payload.next_token)
     } else {
       url = ""
     }
@@ -143,7 +158,7 @@ export const syncOura = async (
     const result = { start, end, trigger, fetched, skipped }
     if (log) {
       await env.DB.prepare("UPDATE sync_log SET finished_at = ?, status = ?, details = ? WHERE id = ?")
-        .bind(new Date().toISOString(), Object.keys(fetched).length === 0 ? "failed" : "complete", JSON.stringify(result), log.id).run()
+        .bind(new Date().toISOString(), Object.keys(fetched).length === 0 ? "failed" : Object.keys(skipped).length ? "partial" : "complete", JSON.stringify(result), log.id).run()
     }
     return result
   } finally {

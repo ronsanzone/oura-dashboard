@@ -1,390 +1,251 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import ReactECharts from "echarts-for-react"
-import {
-  buildDailyPoints,
-  mean,
-  pearson,
-  type DailyPoint,
-  type ObservatoryStatus,
-  type OuraRecord
-} from "@oura/shared"
+import { Experiments } from "./Experiments"
+import { baselineFor, buildDailyPoints, dayStart, localDay, mainSleep, pearson, shiftDay, timeZone, type DailyPoint, type ObservatoryStatus, type OuraRecord, type RecordsPage } from "@oura/shared"
 
-const colors = {
-  cyan: "#61e7e0",
-  violet: "#9b87f5",
-  blue: "#5da5fa",
-  green: "#57d68d",
-  amber: "#ffbd66",
-  pink: "#f47ca6",
-  red: "#ff6b72",
-  grid: "rgba(142, 163, 190, .13)",
-  muted: "#8492a8"
+// Waffle Cat: ronsanzone/dotfiles/theme-picker/themes/omarchy-waffle-cat.json
+const ink = "#fff4d8", muted = "#a58c82", grid = "#463b3e"
+const palette = ["#df9850", "#9eb8b2", "#c98c97", "#9fad68", "#e4c56d"]
+const tabs = ["Today", "Sleep", "Cardio", "Activity", "Explore", "Experiments", "Data"] as const
+type Tab = typeof tabs[number]
+const num = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined
+const fmt = (value: unknown, digits = 1) => num(value)?.toLocaleString(undefined, { maximumFractionDigits: digits }) ?? "—"
+const clock = (value: number | string) => new Date(value).toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" })
+const stamp = (value: string | null | undefined) => value ? new Date(value).toLocaleString("en-US", { timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not recorded"
+const recordDay = (record: OuraRecord) => String(record.payload.day ?? record.payload.start_day ?? record.record_date ?? "")
+const startTime = (record: OuraRecord) => Date.parse(String(record.start_datetime ?? record.payload.timestamp ?? record.payload.bedtime_start ?? record.payload.start_time ?? ""))
+const eventLabel = (record: OuraRecord) => String(record.payload.comment || record.payload.custom_name || record.payload.tag_type_code || record.payload.activity || record.payload.type || record.data_type).replaceAll("_", " ")
+const base = {
+  animation: false, backgroundColor: "transparent", textStyle: { color: muted, fontFamily: "system-ui", fontSize: 12 },
+  grid: { left: 52, right: 22, top: 32, bottom: 36 },
+  tooltip: { trigger: "axis", renderMode: "richText", backgroundColor: "#1f181c", borderColor: grid, textStyle: { color: ink } },
+  xAxis: { type: "category", axisLine: { lineStyle: { color: grid } }, axisLabel: { color: muted }, boundaryGap: false },
+  yAxis: { type: "value", axisLabel: { color: muted }, splitLine: { lineStyle: { color: grid } } }
 }
 
-const chartBase = {
-  animationDuration: 350,
-  backgroundColor: "transparent",
-  textStyle: { color: "#9aa9bd", fontFamily: "IBM Plex Mono, ui-monospace, monospace", fontSize: 11 },
-  grid: { left: 44, right: 20, top: 34, bottom: 34 },
-  tooltip: { trigger: "axis", backgroundColor: "#111827", borderColor: "#334155", textStyle: { color: "#e5edf7" } },
-  legend: { top: 0, right: 0, textStyle: { color: "#8fa0b8", fontSize: 10 } },
-  xAxis: { type: "category", axisLine: { lineStyle: { color: colors.grid } }, axisLabel: { color: colors.muted }, splitLine: { show: false } },
-  yAxis: { type: "value", axisLine: { show: false }, axisLabel: { color: colors.muted }, splitLine: { lineStyle: { color: colors.grid } } }
+function Panel({ title, meta, children, wide = false }: { title: string; meta?: string; children: ReactNode; wide?: boolean }) {
+  return <section className={`panel ${wide ? "wide" : ""}`}><header className="panel-head"><h2>{title}</h2>{meta && <span>{meta}</span>}</header>{children}</section>
+}
+function Empty({ children }: { children: ReactNode }) { return <p className="empty">{children}</p> }
+function Chart({ option, height = 240 }: { option: object; height?: number }) {
+  return <ReactECharts option={{ ...option, aria: { enabled: true } }} style={{ height }} opts={{ renderer: "canvas" }} notMerge />
 }
 
-type Tab = "Command" | "Sleep" | "Cardio" | "Activity" | "Relations" | "Data"
-const tabs: Tab[] = ["Command", "Sleep", "Cardio", "Activity", "Relations", "Data"]
-
-const isoDate = (date: Date): string => new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/Los_Angeles",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit"
-}).format(date)
-const dateDaysAgo = (days: number): string => {
-  const date = new Date()
-  date.setDate(date.getDate() - days)
-  return isoDate(date)
+function Trend({ points, history = points, metric, title, unit, color = palette[0] }: { points: DailyPoint[]; history?: DailyPoint[]; metric: keyof DailyPoint; title: string; unit: string; color?: string }) {
+  const observed = points.filter((point) => num(point[metric]) !== undefined)
+  const latest = observed.at(-1)
+  const baseline = latest ? baselineFor(history, latest.day, metric) : undefined
+  return <Panel title={title} meta={unit}>
+    {latest ? <>
+      <div className="trend-value">{fmt(latest[metric])} <small>{unit}</small><span>Last observed {latest.day}</span></div>
+      <Chart option={{ ...base, xAxis: { ...base.xAxis, data: points.map((point) => point.day.slice(5)) },
+        yAxis: { ...base.yAxis, name: unit, scale: true }, series: [{ name: title, type: "line", showSymbol: points.length < 15, connectNulls: false,
+          data: points.map((point) => point[metric] ?? null), lineStyle: { width: 2, color }, itemStyle: { color },
+          markLine: baseline?.mean === undefined ? undefined : { symbol: "none", label: { show: false }, lineStyle: { color: muted, type: "dashed" }, data: [{ yAxis: baseline.mean }] } }] }} />
+      <p className="caption">{observed.length}/{points.length} days measured. {baseline?.mean === undefined ? "Not enough prior observations for a baseline (7 required)." : `Dashed line: prior 28-day mean ${fmt(baseline.mean)} ${unit}, n=${baseline.count}; excludes latest day.`}</p>
+    </> : <Empty>No {title.toLowerCase()} measurements in this window. Missing is not zero.</Empty>}
+  </Panel>
 }
 
-const formatValue = (value: number | undefined, digits = 1): string =>
-  value === undefined || !Number.isFinite(value) ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: digits })
-
-const metricDelta = (values: (number | undefined)[]): number | undefined => {
-  const latest = [...values].reverse().find((value) => value !== undefined)
-  const baseline = mean(values.slice(-29, -1))
-  return latest === undefined || baseline === undefined ? undefined : latest - baseline
+function Brief({ points, day }: { points: DailyPoint[]; day: string }) {
+  const current = points.find((point) => point.day === day)
+  const metrics = [["Main sleep", "totalSleepHours", "h"], ["Overnight HRV", "averageHrv", "ms"], ["Lowest sleeping HR", "lowestHeartRate", "bpm"]] as const
+  const sleepBase = baselineFor(points, day, "totalSleepHours")
+  const change = current?.totalSleepHours === undefined || sleepBase.mean === undefined ? undefined : current.totalSleepHours - sleepBase.mean
+  return <>
+    <section className="brief"><div><span className="eyebrow">YOUR MORNING BRIEF · {day}</span><h1>A little perspective,<br />before your day begins.</h1>
+      <p>{change === undefined ? "Start with what was measured. A missing night is a gap in the story, not a verdict on your day." : `Your main sleep was ${fmt(Math.abs(change) * 60, 0)} minutes ${change >= 0 ? "longer" : "shorter"} than your prior 28-day average. Look at the night in context, not just the score.`}</p></div>
+      <div className="next-step"><span className="eyebrow">ONE SMALL NEXT STEP</span><h3>{current ? "Notice your routine." : "Check your coverage."}</h3><p>{current ? "Review the timeline and your Oura tags. Note what was different before deciding what to change." : "Sync Oura or choose an earlier date. We won’t substitute an older measurement for this day."}</p><a href="#body-timeline">Explore this day <span>↘</span></a></div>
+    </section>
+    <div className="brief-metrics">{metrics.map(([title, key, unit], index) => {
+      const value = current?.[key], baseline = baselineFor(points, day, key)
+      const delta = value === undefined || baseline.mean === undefined ? undefined : value - baseline.mean
+      return <article className="metric" key={key} style={{ borderTopColor: palette[index] }}><span>{title}</span><strong>{fmt(value)} <small>{unit}</small></strong>
+        <p>{value === undefined ? "No measurement for this date" : delta === undefined ? "Building your personal baseline" : `${delta >= 0 ? "+" : ""}${fmt(delta)} ${unit} vs your baseline`}</p>
+        <details><summary>Measurement & context</summary><p>{day} · Oura sleep record, longest sleep of the day. Prior window: {shiftDay(day, -28)}–{shiftDay(day, -1)}. {baseline.count}/28 observed nights; mean {fmt(baseline.mean)} {unit}. At least 7 nights required. Gaps excluded, never filled.</p></details>
+      </article>
+    })}</div>
+  </>
 }
 
-const metricOption = (
-  points: DailyPoint[],
-  series: { key: keyof DailyPoint; name: string; color: string; type?: "line" | "bar"; yAxisIndex?: number }[],
-  stacked = false
-) => ({
-  ...chartBase,
-  xAxis: { ...chartBase.xAxis, data: points.map((point) => point.day.slice(5)) },
-  series: series.map((entry) => ({
-    name: entry.name,
-    type: entry.type ?? "line",
-    data: points.map((point) => point[entry.key] ?? null),
-    smooth: entry.type !== "bar" ? 0.22 : false,
-    symbolSize: 5,
-    showSymbol: points.length < 40,
-    lineStyle: { width: 2, color: entry.color },
-    itemStyle: { color: entry.color, opacity: .9 },
-    areaStyle: entry.type === "line" ? { opacity: .04 } : undefined,
-    stack: stacked ? "total" : undefined,
-    yAxisIndex: entry.yAxisIndex ?? 0
-  }))
-})
+type Sample = [number, number | null]
+function samples(value: unknown): Sample[] {
+  if (!value || typeof value !== "object") return []
+  const data = value as { timestamp?: string; interval?: number; items?: unknown[] }
+  const start = Date.parse(data.timestamp ?? ""), interval = num(data.interval)
+  if (!Number.isFinite(start) || !interval || !Array.isArray(data.items)) return []
+  return data.items.map((item, index) => [start + index * interval * 1000, num(item) ?? null])
+}
 
-function Panel({ title, meta, children, className = "" }: { title: string; meta?: string; children: ReactNode; className?: string }) {
-  return <section className={`panel ${className}`}>
-    <header className="panel-head"><h2>{title}</h2>{meta && <span>{meta}</span>}</header>
-    {children}
+function Timeline({ records, day }: { records: OuraRecord[]; day: string }) {
+  const [mode, setMode] = useState("night")
+  const [position, setPosition] = useState(50)
+  const midnight = Date.parse(dayStart(day))
+  const nextMidnight = Date.parse(dayStart(shiftDay(day, 1)))
+  const min = mode === "night" ? midnight - 6 * 3600000 : midnight
+  const max = mode === "night" ? nextMidnight - 6 * 3600000 : nextMidnight
+  const cursor = min + (max - min) * position / 100
+  const within = (time: number) => time >= min && time < max
+  const sleeps = records.filter((record) => record.data_type === "sleep")
+  const phases: Sample[] = sleeps.flatMap((record) => {
+    const phases = record.payload.sleep_phase_30_sec
+    if (typeof phases !== "string") return []
+    const start = startTime(record)
+    return [...phases].map((value, index): Sample => [start + index * 30000, /^[1-4]$/.test(value) ? Number(value) : null]).concat([[start + phases.length * 30000, null]])
+  }).filter(([time]) => within(time)).sort((a, b) => a[0] - b[0])
+  const hr: Sample[] = records.filter((record) => record.data_type === "heart_rate" && within(startTime(record)))
+    .map((record): Sample => [startTime(record), num(record.payload.bpm) ?? null]).sort((a, b) => a[0] - b[0])
+  const met = records.filter((record) => record.data_type === "daily_activity").flatMap((record) => samples(record.payload.met)).filter(([time]) => within(time)).sort((a, b) => a[0] - b[0])
+  const events = records.filter((record) => ["tag", "session", "workout"].includes(record.data_type) && (within(startTime(record)) || (!Number.isFinite(startTime(record)) && recordDay(record) === day)))
+  const sleepEvents = sleeps.flatMap((record) => [{ time: startTime(record), label: "Bedtime" }, { time: Date.parse(String(record.end_datetime ?? record.payload.bedtime_end ?? "")), label: "Wake time" }]).filter((event) => within(event.time))
+  const timedEvents = [...sleepEvents, ...events.filter((record) => Number.isFinite(startTime(record))).map((record) => ({ time: startTime(record), label: eventLabel(record) }))].sort((a, b) => a.time - b.time)
+  const lanes = [phases, hr, met, timedEvents.map((event): Sample => [event.time, 1])]
+  const names = ["Sleep stage", "Heart rate · bpm", "Activity · MET", "Context"]
+  const nearest = (data: Sample[], tolerance: number) => data.filter(([time, value]) => value !== null && Math.abs(time - cursor) <= tolerance).sort((a, b) => Math.abs(a[0] - cursor) - Math.abs(b[0] - cursor))[0]
+  const heart = nearest(hr, 5 * 60000), activity = nearest(met, 60000), stage = nearest(phases, 30000)
+  const option = {
+    ...base, tooltip: { ...base.tooltip, axisPointer: { type: "line" } }, axisPointer: { link: [{ xAxisIndex: "all" }] },
+    grid: [0, 1, 2, 3].map((index) => ({ left: 60, right: 20, top: index * 112 + 28, height: index === 3 ? 40 : 72 })),
+    xAxis: lanes.map((_, index) => ({ type: "time", gridIndex: index, min, max, splitNumber: 4, axisLine: { lineStyle: { color: grid } }, splitLine: { show: true, lineStyle: { color: grid } }, axisLabel: { show: index === 3, hideOverlap: true, color: muted, formatter: (value: number) => new Date(value).toLocaleTimeString("en-US", { timeZone, hour: "numeric" }) } })),
+    yAxis: lanes.map((_, index) => ({ type: "value", gridIndex: index, name: names[index], nameLocation: "end", nameTextStyle: { color: ink, align: "left" }, min: index === 0 ? 1 : index === 3 ? 0 : undefined, max: index === 0 ? 4 : index === 3 ? 2 : undefined, interval: index === 0 ? 1 : undefined, scale: index === 1, splitLine: { lineStyle: { color: grid } }, axisLabel: { show: index !== 3, color: muted, formatter: index === 0 ? (value: number) => ["", "Deep", "Light", "REM", "Awake"][value] : undefined } })),
+    series: lanes.map((data, index) => ({ name: names[index], xAxisIndex: index, yAxisIndex: index, type: index === 0 ? "line" : index === 2 ? "bar" : "scatter", step: index === 0 ? "end" : undefined, showSymbol: false, symbolSize: index === 3 ? 12 : 4, data, itemStyle: { color: palette[index] }, lineStyle: { color: palette[index], width: 2 }, markLine: { silent: true, symbol: "none", label: { show: false }, lineStyle: { color: ink, opacity: .6 }, data: [{ xAxis: cursor }] } })),
+    graphic: lanes.flatMap((data, index) => data.some(([, value]) => value !== null) ? [] : [{ type: "text", left: "center", top: index * 112 + 57, style: { text: index === 3 ? "No timed events logged" : "No samples available — not zero", fill: muted, fontSize: 12 } }])
+  }
+  return <section className="panel timeline" id="body-timeline"><header className="panel-head"><div><span className="eyebrow">THE BODY TIMELINE</span><h2>Your day, in its own rhythm.</h2></div><div className="segmented">{["night", "day"].map((value) => <button key={value} aria-pressed={mode === value} onClick={() => setMode(value)}>{value === "night" ? "Night → day" : "Calendar day"}</button>)}</div></header>
+    <p className="caption">{mode === "night" ? "Previous 6 PM → selected 6 PM" : "Midnight → midnight"} · Eastern time · Separate scales, one shared clock. Heart rate is measured samples, not an interpolated trace.</p>
+    <ReactECharts option={{ ...option, aria: { enabled: true } }} style={{ height: 438 }} notMerge onEvents={{ click: (event: { value?: Sample }) => { if (Array.isArray(event.value)) setPosition(Math.max(0, Math.min(100, (event.value[0] - min) / (max - min) * 100))) } }} />
+    <label className="cursor-control">Inspect a moment <input type="range" min="0" max="100" step="0.1" value={position} onChange={(event) => setPosition(Number(event.target.value))} /></label>
+    <div className="moment" aria-live="polite"><strong>{clock(cursor)}</strong><span>Sleep: {stage ? ["", "Deep", "Light", "REM", "Awake"][stage[1] ?? 0] : "no nearby sample"}</span><span>HR: {heart ? `${heart[1]} bpm at ${clock(heart[0])}` : "no sample within 5 min"}</span><span>Activity: {activity ? `${fmt(activity[1])} MET` : "no sample within 1 min"}</span></div>
+    <div className="events">{timedEvents.map((event, index) => <button key={index} onClick={() => setPosition((event.time - min) / (max - min) * 100)}><small>{clock(event.time)}</small>{event.label}</button>)}{events.filter((record) => !Number.isFinite(startTime(record))).map((record) => <div key={record.record_id}><small>Day-level context · time unknown</small>{eventLabel(record)}</div>)}</div>
+    <p className="caption">Unlogged context is unknown, not “didn’t happen.” Daily stress is a daily total and is never plotted as an intraday signal.</p>
   </section>
 }
 
-function Chart({ option, height = 290 }: { option: object; height?: number }) {
-  return <ReactECharts option={option} style={{ height }} opts={{ renderer: "canvas" }} notMerge />
-}
-
-function Metric({ label, value, unit, delta, inverse = false }: { label: string; value?: number; unit?: string; delta?: number; inverse?: boolean }) {
-  const deltaClass = delta === undefined ? "neutral" : (delta >= 0) !== inverse ? "positive" : "negative"
-  return <div className="metric">
-    <span>{label}</span>
-    <strong>{formatValue(value)}<small>{value === undefined ? "" : unit}</small></strong>
-    <em className={deltaClass}>{delta === undefined ? "no baseline" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} vs base`}</em>
-  </div>
-}
-
-const latest = (points: DailyPoint[], key: keyof DailyPoint): number | undefined => {
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    const value = points[index]?.[key]
-    if (typeof value === "number") return value
-  }
-  return undefined
-}
-
-function CommandView({ points }: { points: DailyPoint[] }) {
-  const scoreOption = metricOption(points, [
-    { key: "readinessScore", name: "Readiness", color: colors.cyan },
-    { key: "sleepScore", name: "Sleep", color: colors.violet },
-    { key: "activityScore", name: "Activity", color: colors.green }
-  ])
-  const physio = metricOption(points, [
-    { key: "averageHrv", name: "HRV ms", color: colors.cyan },
-    { key: "lowestHeartRate", name: "Lowest HR", color: colors.pink },
-    { key: "temperatureDeviation", name: "Temp Δ", color: colors.amber, type: "bar" }
-  ])
-  const anomalies = [
-    ["Average HRV", "averageHrv"], ["Lowest heart rate", "lowestHeartRate"],
-    ["Temperature deviation", "temperatureDeviation"], ["Total sleep", "totalSleepHours"],
-    ["Steps", "steps"], ["Average SpO₂", "averageSpo2"]
-  ] as const
-
-  return <div className="dashboard-grid">
-    <Panel title="System scores" meta="DAILY SIGNAL" className="span-8"><Chart option={scoreOption} /></Panel>
-    <Panel title="Signal deviations" meta="LATEST VS WINDOW" className="span-4">
-      <div className="deviation-list">
-        {anomalies.map(([name, key]) => {
-          const values = points.map((point) => point[key])
-          const current = latest(points, key)
-          const average = mean(values)
-          const variance = mean(values.map((value) => value === undefined || average === undefined ? undefined : (value - average) ** 2))
-          const z = current === undefined || average === undefined || !variance ? undefined : (current - average) / Math.sqrt(variance)
-          return <div className="deviation" key={key}><span>{name}</span><b>{formatValue(current, 2)}</b><i>{z === undefined ? "—" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}σ`}</i></div>
-        })}
-      </div>
+function SleepView({ points, history, records, day }: { points: DailyPoint[]; history: DailyPoint[]; records: OuraRecord[]; day: string }) {
+  const sleeps = records.filter((record) => record.data_type === "sleep" && recordDay(record) === day)
+  const main = mainSleep(sleeps)
+  const [selected, setSelected] = useState("")
+  const sleep = sleeps.find((record) => record.record_id === selected) ?? main
+  const p = sleep?.payload
+  const total = sleeps.length && sleeps.every((record) => num(record.payload.total_sleep_duration) !== undefined) ? sleeps.reduce((sum, record) => sum + Number(record.payload.total_sleep_duration), 0) / 3600 : undefined
+  const stages = [["Deep", p?.deep_sleep_duration], ["REM", p?.rem_sleep_duration], ["Light", p?.light_sleep_duration], ["Awake", p?.awake_time]]
+  return <div className="dashboard-grid"><Panel title="One night, not one score." meta={day} wide>
+    <div className="sleep-summary"><label>Sleep episode<select value={sleep?.record_id ?? ""} onChange={(event) => setSelected(event.target.value)}>{!sleeps.length && <option>No sleep for this date</option>}{sleeps.map((record) => <option key={record.record_id} value={record.record_id}>{record === main ? "Main sleep (longest)" : "Additional sleep / nap"} · {clock(startTime(record))} · {fmt(Number(record.payload.total_sleep_duration) / 3600)} h</option>)}</select></label><div><strong>{fmt(total)} h</strong><span>Total across {sleeps.length} episodes</span></div><div><strong>{fmt(num(p?.total_sleep_duration) === undefined ? undefined : Number(p?.total_sleep_duration) / 3600)} h</strong><span>Selected episode · asleep</span></div></div>
+    <div className="stage-summary">{stages.map(([label, value], index) => <div key={String(label)} style={{ borderColor: palette[index] }}><span>{String(label)}</span><b>{num(value) === undefined ? "Not measured" : `${fmt(Number(value) / 3600)} h`}</b></div>)}</div>
+    <p className="caption">Daily trends and the brief use the longest episode; total daily sleep includes naps. No proprietary sleep-debt estimate is inferred.</p>
+  </Panel>
+    <Trend points={points} history={history} metric="totalSleepHours" title="Main sleep duration" unit="h" />
+    <Trend points={points} history={history} metric="sleepEfficiency" title="Sleep efficiency" unit="%" color={palette[1]} />
+    <Trend points={points} history={history} metric="sleepScore" title="Sleep score" unit="/ 100" color={palette[2]} />
+    <Panel title="Selected episode physiology" meta="SOURCE SAMPLES">
+      {([['heart_rate', 'Heart rate', 'bpm'], ['hrv', 'HRV', 'ms']] as const).map(([key, title, unit], index) => {
+        const data = samples(p?.[key])
+        return <div key={key}><p className="caption">{title} · {unit}</p>{data.some(([, value]) => value !== null) ? <Chart height={140} option={{ ...base, xAxis: { ...base.xAxis, type: "time", axisLabel: { color: muted, formatter: (value: number) => clock(value) } }, yAxis: { ...base.yAxis, scale: true }, series: [{ name: `${title} · ${unit}`, type: "line", data, showSymbol: false, connectNulls: false, lineStyle: { color: palette[index] } }] }} /> : <Empty>No {title.toLowerCase()} samples for this episode.</Empty>}</div>
+      })}
     </Panel>
-    <Panel title="Physiological signals" meta="HRV / RHR / TEMPERATURE" className="span-8"><Chart option={physio} /></Panel>
-    <Panel title="Latest state vector" meta={points.at(-1)?.day ?? "NO PARTITION"} className="span-4">
-      <div className="state-grid">
-        {["readinessScore", "sleepScore", "activityScore", "averageHrv", "lowestHeartRate", "totalSleepHours", "sleepEfficiency", "averageSpo2", "steps", "stressHours"]
-          .map((key) => <div key={key}><span>{key.replace(/([A-Z])/g, " $1")}</span><b>{formatValue(latest(points, key as keyof DailyPoint), 2)}</b></div>)}
-      </div>
-    </Panel>
+    <Panel title="Bed & wake rhythm" meta="EASTERN TIME" wide><div className="rhythm">{points.slice(-14).map((point) => {
+      const sleep = mainSleep(records.filter((record) => recordDay(record) === point.day))
+      return <div key={point.day}><span>{point.day.slice(5)}</span><b>{sleep ? clock(startTime(sleep)) : "—"}</b><span>→</span><b>{sleep?.end_datetime || sleep?.payload.bedtime_end ? clock(String(sleep.end_datetime ?? sleep.payload.bedtime_end)) : "—"}</b></div>
+    })}</div><p className="caption">Last 14 days · main sleep only. Times preserve the source instant; no invented bedtime recommendations.</p></Panel>
+    <div className="wide"><Timeline records={records} day={day} /></div>
   </div>
 }
 
-function ContributorHeatmap({ points, prefix }: { points: DailyPoint[]; prefix: string }) {
-  const keys = [...new Set(points.flatMap((point) => Object.keys(point).filter((key) => key.startsWith(prefix))))]
-  const data = points.flatMap((point, y) => keys.flatMap((key, x) => {
-    const value = point[key as keyof DailyPoint]
-    return typeof value === "number" ? [[x, y, value]] : []
-  }))
-  return <Chart height={300} option={{
-    ...chartBase,
-    grid: { left: 70, right: 15, top: 30, bottom: 85 },
-    tooltip: { position: "top" },
-    xAxis: { type: "category", data: keys.map((key) => key.split(".").at(-1)?.replaceAll("_", " ")), axisLabel: { rotate: 45, color: colors.muted } },
-    yAxis: { type: "category", data: points.map((point) => point.day.slice(5)), axisLabel: { color: colors.muted } },
-    visualMap: { min: 0, max: 100, calculable: false, orient: "horizontal", left: "center", top: 0, show: false, inRange: { color: ["#351829", "#7643c8", "#168fa5", "#61e7e0"] } },
-    series: [{ type: "heatmap", data }]
-  }} />
+function Events({ records }: { records: OuraRecord[] }) {
+  const events = records.filter((record) => ["workout", "session", "tag"].includes(record.data_type))
+  return <Panel title="The context you logged" meta={`${events.length} EVENTS`} wide>{events.length ? <div className="table-wrap"><table><thead><tr><th>Day</th><th>Type</th><th>Context</th><th>Duration</th></tr></thead><tbody>{events.map((record) => <tr key={`${record.data_type}-${record.record_id}`}><td>{recordDay(record) || (Number.isFinite(startTime(record)) ? localDay(new Date(startTime(record))) : "Unknown")}</td><td>{record.data_type}</td><td>{eventLabel(record)}</td><td>{record.end_datetime && Number.isFinite(startTime(record)) ? `${fmt((Date.parse(record.end_datetime) - startTime(record)) / 60000)} min` : "Not recorded"}</td></tr>)}</tbody></table></div> : <Empty>No workouts, sessions or tags in this window. This does not mean none happened.</Empty>}</Panel>
 }
 
-function SleepView({ points, records }: { points: DailyPoint[]; records: OuraRecord[] }) {
-  const stages = metricOption(points, [
-    { key: "deepSleepHours", name: "Deep", color: "#6157d9", type: "bar" },
-    { key: "remSleepHours", name: "REM", color: colors.violet, type: "bar" },
-    { key: "lightSleepHours", name: "Light", color: colors.blue, type: "bar" },
-    { key: "awakeHours", name: "Awake", color: colors.amber, type: "bar" }
-  ], true)
-  const sleeps = records.filter((record) => record.data_type === "sleep")
-  const latestSleep = [...sleeps].sort((a, b) => String(a.start_datetime).localeCompare(String(b.start_datetime))).at(-1)
-  const phaseString = typeof latestSleep?.payload.sleep_phase_30_sec === "string" ? latestSleep.payload.sleep_phase_30_sec : ""
-  const phaseOption = {
-    ...chartBase,
-    xAxis: { type: "category", data: [...phaseString].map((_, index) => index % 120 === 0 ? `${Math.floor(index / 120)}h` : ""), axisLabel: { color: colors.muted } },
-    yAxis: { type: "value", min: 1, max: 4, interval: 1, axisLabel: { formatter: (value: number) => ["", "Deep", "Light", "REM", "Awake"][value] } },
-    series: [{ type: "line", step: "end", symbol: "none", data: [...phaseString].map(Number), lineStyle: { width: 1.2, color: colors.violet }, areaStyle: { opacity: .09 } }]
-  }
-  return <div className="dashboard-grid">
-    <Panel title="Sleep architecture" meta="HOURS BY STAGE" className="span-7"><Chart option={stages} height={310} /></Panel>
-    <Panel title="Sleep score contributors" meta="0–100" className="span-5"><ContributorHeatmap points={points} prefix="sleepContributor." /></Panel>
-    <Panel title="Latest sleep-stage trace" meta={`${latestSleep?.record_date ?? "—"} · 30S RESOLUTION`} className="span-12"><Chart option={phaseOption} height={250} /></Panel>
-  </div>
+function Explore({ points }: { points: DailyPoint[] }) {
+  const choices = [["Main sleep · h", "totalSleepHours"], ["HRV · ms", "averageHrv"], ["Lowest HR · bpm", "lowestHeartRate"], ["Steps", "steps"], ["Daily stress · h", "stressHours"]] as const
+  const [x, setX] = useState<keyof DailyPoint>("totalSleepHours"), [y, setY] = useState<keyof DailyPoint>("averageHrv")
+  const pairs = points.filter((point) => num(point[x]) !== undefined && num(point[y]) !== undefined)
+  const r = pairs.length >= 14 && x !== y ? pearson(pairs.map((point) => num(point[x])), pairs.map((point) => num(point[y]))) : undefined
+  return <div className="dashboard-grid"><Panel title="Ask a smaller question." meta="OBSERVATIONAL EXPLORER" wide><p>Do two measurements move together? Start here before designing an experiment. These same-day comparisons cannot establish cause, and nights are not independent observations.</p><div className="select-row"><label>First measurement<select value={x} onChange={(event) => setX(event.target.value as keyof DailyPoint)}>{choices.map(([name, key]) => <option key={key} value={key}>{name}</option>)}</select></label><label>Second measurement<select value={y} onChange={(event) => setY(event.target.value as keyof DailyPoint)}>{choices.map(([name, key]) => <option key={key} value={key}>{name}</option>)}</select></label></div>
+    {r === undefined ? <Empty>{x === y ? "Choose two different measurements." : `Not enough evidence: ${pairs.length} paired days. At least 14 non-constant paired observations are required.`}</Empty> : <><Chart height={320} option={{ ...base, xAxis: { ...base.yAxis, name: choices.find(([, key]) => key === x)?.[0], nameLocation: "middle", nameGap: 28, scale: true }, yAxis: { ...base.yAxis, name: choices.find(([, key]) => key === y)?.[0], scale: true }, series: [{ type: "scatter", symbolSize: 8, data: pairs.map((point) => [point[x], point[y]]), itemStyle: { color: palette[0] } }] }} /><p className="relation-result">r = {fmt(r, 2)} <span>· {pairs.length} paired days · {points.length - pairs.length} days excluded for missing measurements</span></p></>}
+    <p className="caption">Exploratory only: routine, travel, seasonality and serial correlation can explain an association. No confidence or causal claim is inferred from this coefficient. Score/component pairs are deliberately excluded.</p></Panel><Panel title="What am I testing?" meta="A DELIBERATE NEXT STEP" wide><p>Pick one routine, one outcome and a comparison period. Log adherence explicitly in Oura tags—including days you did not follow it. Unlogged days remain unknown.</p><p className="caption">An experiment notebook and adherence analysis are not yet implemented. No automated recommendations or Jev inferences run here.</p></Panel></div>
 }
 
-function CardioView({ points, records }: { points: DailyPoint[]; records: OuraRecord[] }) {
-  const heartRate = records.filter((record) => record.data_type === "heart_rate").map((record) => ({
-    timestamp: String(record.payload.timestamp ?? record.start_datetime ?? ""),
-    bpm: Number(record.payload.bpm),
-    source: String(record.payload.source ?? "unknown")
-  })).filter((row) => Number.isFinite(row.bpm))
-  const sources = [...new Set(heartRate.map((row) => row.source))]
-  const stream = {
-    ...chartBase,
-    xAxis: { type: "time", axisLabel: { color: colors.muted } },
-    series: sources.map((source, index) => ({
-      name: source, type: "scatter", symbolSize: 4,
-      data: heartRate.filter((row) => row.source === source).map((row) => [row.timestamp, row.bpm]),
-      itemStyle: { color: [colors.pink, colors.amber, colors.cyan, colors.green][index % 4] }
-    }))
-  }
-  const distributionBins = Array.from({ length: 31 }, (_, index) => 40 + index * 3)
-  const histogram = distributionBins.map((floor) => heartRate.filter((row) => row.bpm >= floor && row.bpm < floor + 3).length)
-  const distribution = {
-    ...chartBase,
-    xAxis: { type: "category", data: distributionBins, axisLabel: { color: colors.muted } },
-    series: [{ type: "bar", data: histogram, itemStyle: { color: colors.pink } }]
-  }
-  const vascular = metricOption(points, [
-    { key: "vascularAge", name: "Vascular age", color: colors.violet, type: "bar" },
-    { key: "pulseWaveVelocity", name: "PWV", color: colors.cyan }
-  ])
-  return <div className="dashboard-grid">
-    <Panel title="Heart-rate event stream" meta={`${heartRate.length.toLocaleString()} EVENTS`} className="span-8"><Chart option={stream} height={330} /></Panel>
-    <Panel title="Heart-rate distribution" meta="3 BPM BUCKETS" className="span-4"><Chart option={distribution} height={330} /></Panel>
-    <Panel title="Vascular telemetry" meta="CVA / PWV" className="span-12"><Chart option={vascular} height={270} /></Panel>
-  </div>
-}
-
-function ActivityView({ points, records }: { points: DailyPoint[]; records: OuraRecord[] }) {
-  const movement = metricOption(points, [
-    { key: "steps", name: "Steps", color: colors.blue, type: "bar" },
-    { key: "activeCalories", name: "Active kcal", color: colors.amber }
-  ])
-  const intensity = metricOption(points, [
-    { key: "sedentaryHours", name: "Sedentary", color: "#46546b", type: "bar" },
-    { key: "lowActivityHours", name: "Low", color: colors.blue, type: "bar" },
-    { key: "mediumActivityHours", name: "Medium", color: colors.cyan, type: "bar" },
-    { key: "highActivityHours", name: "High", color: colors.green, type: "bar" }
-  ], true)
-  const stress = metricOption(points, [
-    { key: "stressHours", name: "Stress", color: colors.red, type: "bar" },
-    { key: "recoveryHours", name: "Recovery", color: colors.green, type: "bar" }
-  ])
-  const workouts = records.filter((record) => record.data_type === "workout")
-  return <div className="dashboard-grid">
-    <Panel title="Movement + energy" meta="STEPS / CALORIES" className="span-7"><Chart option={movement} /></Panel>
-    <Panel title="Movement intensity budget" meta="HOURS / DAY" className="span-5"><Chart option={intensity} /></Panel>
-    <Panel title="Activity contributors" meta="0–100" className="span-7"><ContributorHeatmap points={points} prefix="activityContributor." /></Panel>
-    <Panel title="Stress / recovery allocation" meta="HOURS" className="span-5"><Chart option={stress} height={300} /></Panel>
-    <Panel title="Workout event log" meta={`${workouts.length} EVENTS`} className="span-12">
-      <div className="table-wrap"><table><thead><tr><th>Day</th><th>Activity</th><th>Intensity</th><th>Calories</th><th>Distance</th><th>Source</th></tr></thead>
-        <tbody>{workouts.map((record) => <tr key={record.record_id}><td>{record.record_date}</td><td>{String(record.payload.activity ?? record.payload.label ?? "—")}</td><td>{String(record.payload.intensity ?? "—")}</td><td>{formatValue(Number(record.payload.calories))}</td><td>{formatValue(Number(record.payload.distance) / 1000)} km</td><td>{String(record.payload.source ?? "—")}</td></tr>)}</tbody>
-      </table></div>
-    </Panel>
-  </div>
-}
-
-const relationMetrics = [
-  ["Readiness", "readinessScore"], ["Sleep score", "sleepScore"], ["Activity", "activityScore"],
-  ["Average HRV", "averageHrv"], ["Lowest HR", "lowestHeartRate"], ["Total sleep", "totalSleepHours"],
-  ["Deep sleep", "deepSleepHours"], ["REM sleep", "remSleepHours"], ["Sleep efficiency", "sleepEfficiency"],
-  ["Temperature", "temperatureDeviation"], ["Steps", "steps"], ["Stress", "stressHours"], ["SpO₂", "averageSpo2"]
-] as const
-
-function RelationsView({ points }: { points: DailyPoint[] }) {
-  const [xKey, setXKey] = useState<keyof DailyPoint>("totalSleepHours")
-  const [yKey, setYKey] = useState<keyof DailyPoint>("readinessScore")
-  const keys = relationMetrics.filter(([, key]) => points.some((point) => typeof point[key] === "number"))
-  const matrix = keys.flatMap(([, left], y) => keys.map(([, right], x) => [x, y, pearson(points.map((point) => point[left]), points.map((point) => point[right])) ?? null]))
-  const pair = points.flatMap((point) => {
-    const x = point[xKey]
-    const y = point[yKey]
-    return typeof x === "number" && typeof y === "number" ? [[x, y, point.day]] : []
-  })
-  return <div className="dashboard-grid">
-    <Panel title="Correlation matrix" meta={`N=${points.length} DAYS · PEARSON`} className="span-8"><Chart height={520} option={{
-      ...chartBase,
-      grid: { left: 100, right: 20, top: 20, bottom: 100 },
-      xAxis: { type: "category", data: keys.map(([name]) => name), axisLabel: { rotate: 45, color: colors.muted } },
-      yAxis: { type: "category", data: keys.map(([name]) => name), axisLabel: { color: colors.muted } },
-      visualMap: { min: -1, max: 1, show: false, inRange: { color: [colors.red, "#151b27", colors.cyan] } },
-      series: [{ type: "heatmap", data: matrix, label: { show: true, formatter: ({ value }: { value: [number, number, number | null] }) => value[2] === null ? "" : value[2].toFixed(2), color: "#dce7f5", fontSize: 9 } }]
-    }} /></Panel>
-    <Panel title="Relationship explorer" meta="INTERACTIVE PAIR" className="span-4">
-      <div className="select-row"><select value={String(xKey)} onChange={(event) => setXKey(event.target.value as keyof DailyPoint)}>{keys.map(([name, key]) => <option value={key} key={key}>{name}</option>)}</select><span>×</span><select value={String(yKey)} onChange={(event) => setYKey(event.target.value as keyof DailyPoint)}>{keys.map(([name, key]) => <option value={key} key={key}>{name}</option>)}</select></div>
-      <Chart height={390} option={{ ...chartBase, xAxis: { type: "value", axisLabel: { color: colors.muted } }, series: [{ type: "scatter", symbolSize: 11, data: pair, itemStyle: { color: colors.cyan, borderColor: "#dce7f5", borderWidth: 1 } }] }} />
-      <div className="relation-score"><span>Pearson r</span><b>{formatValue(pearson(points.map((point) => point[xKey] as number | undefined), points.map((point) => point[yKey] as number | undefined)), 3)}</b><i>{pair.length} overlapping days</i></div>
-    </Panel>
-  </div>
-}
-
+const datasets = [["daily_sleep", "Sleep score", "daily"], ["sleep", "Sleep & overnight physiology", "daily"], ["daily_readiness", "Readiness", "daily"], ["daily_activity", "Activity & MET", "daily"], ["heart_rate", "Heart rate", "heartrate"], ["daily_stress", "Daily stress totals", "stress"], ["daily_spo2", "Oxygen saturation", "spo2"], ["daily_resilience", "Resilience", "stress"], ["cardiovascular_age", "Cardiovascular age", "heart_health"], ["vo2_max", "VO₂ max", "heart_health"], ["tag", "Tags & notes", "tag"], ["workout", "Workouts", "workout"], ["session", "Sessions", "session"]] as const
 function DataView({ status, records }: { status: ObservatoryStatus; records: OuraRecord[] }) {
-  const [selected, setSelected] = useState(status.datasets[0]?.data_type ?? "")
-  const subset = records.filter((record) => record.data_type === selected)
-  return <div className="dashboard-grid">
-    <Panel title="Dataset cardinality" meta={`${status.records.toLocaleString()} RECORDS`} className="span-5"><Chart height={340} option={{
-      ...chartBase,
-      grid: { left: 130, right: 20, top: 20, bottom: 20 },
-      xAxis: { type: "value", axisLabel: { color: colors.muted } },
-      yAxis: { type: "category", data: status.datasets.map((item) => item.data_type), axisLabel: { color: colors.muted } },
-      series: [{ type: "bar", data: status.datasets.map((item) => item.count), itemStyle: { color: colors.cyan } }]
-    }} /></Panel>
-    <Panel title="Storage plane" meta="D1 / LOSSLESS JSON" className="span-7"><div className="storage-stats"><div><span>Daily partitions</span><b>{status.days}</b></div><div><span>First partition</span><b>{status.first_date ?? "—"}</b></div><div><span>Latest partition</span><b>{status.last_date ?? "—"}</b></div><div><span>Last ingest</span><b>{status.last_sync?.replace("T", " ").slice(0, 19) ?? "—"}</b></div></div></Panel>
-    <Panel title="Raw event inspector" meta="SOURCE PAYLOADS" className="span-12">
-      <div className="inspector-head"><select value={selected} onChange={(event) => setSelected(event.target.value)}>{status.datasets.map((item) => <option key={item.data_type}>{item.data_type}</option>)}</select><span>{subset.length.toLocaleString()} rows in selected window</span></div>
-      <pre className="raw-json">{JSON.stringify(subset.slice(0, 25), null, 2)}</pre>
-    </Panel>
-  </div>
+  return <div className="dashboard-grid"><Panel title="Trust starts with coverage." meta="SOURCE: OURA API / IMPORT" wide><p>Last sync attempt: {stamp(status.sync?.started_at)} · {status.sync?.status ?? "No sync history"}. Last changed/imported record: {stamp(status.last_sync)}. A successful sync does not guarantee every measurement is available.</p><p className="caption">Coverage below is for the selected window. Granted scopes: {status.scopes?.length ? status.scopes.join(", ") : "Not recorded"}. Stored data can still be explored while disconnected. HTTP 403 means access denied; the API alone does not distinguish a permission problem from an expired subscription.</p></Panel>
+    {datasets.map(([type, title]) => {
+      const rows = records.filter((record) => record.data_type === type)
+      const days = rows.map((record) => recordDay(record) || (Number.isFinite(startTime(record)) ? localDay(new Date(startTime(record))) : "")).filter(Boolean).sort()
+      const issue = status.sync?.skipped[type]
+      return <Panel key={type} title={title} meta={`${rows.length.toLocaleString()} RECORDS`}><p className={issue ? "warning" : ""}>{issue === "HTTP 403" ? "Access denied by Oura — check permission / subscription" : issue ? `Sync incomplete: ${issue}` : rows.length ? "Measurements available in loaded history" : "No measurements in loaded history — availability unknown"}</p><p className="caption">Observed {days[0] ?? "—"} → {days.at(-1) ?? "—"} · {new Set(days).size} distinct days. Record counts do not prove full-day coverage.</p><details><summary>Source payloads · first 5 records</summary><pre>{JSON.stringify(rows.slice(0, 5), null, 2)}</pre></details></Panel>
+    })}</div>
 }
 
 export function App() {
-  const [status, setStatus] = useState<ObservatoryStatus | null>(null)
-  const [records, setRecords] = useState<OuraRecord[]>([])
-  const [activeTab, setActiveTab] = useState<Tab>("Command")
-  const [windowDays, setWindowDays] = useState(90)
-  const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [statusResponse, recordsResponse] = await Promise.all([
-        fetch("/api/status"),
-        fetch(`/api/records?start=${dateDaysAgo(windowDays)}&end=${isoDate(new Date())}`)
-      ])
-      if (!statusResponse.ok || !recordsResponse.ok) throw new Error("The telemetry API did not respond successfully")
-      setStatus(await statusResponse.json() as ObservatoryStatus)
-      setRecords(await recordsResponse.json() as OuraRecord[])
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load telemetry")
-    } finally {
-      setLoading(false)
+  const today = localDay(new Date())
+  const [day, setDay] = useState(today), [windowDays, setWindowDays] = useState(30), [tab, setTab] = useState<Tab>("Today")
+  const [status, setStatus] = useState<ObservatoryStatus | null>(null), [records, setRecords] = useState<OuraRecord[]>([])
+  const [loading, setLoading] = useState(true), [error, setError] = useState<string | null>(null), [syncing, setSyncing] = useState(false), [refresh, setRefresh] = useState(0)
+  const start = shiftDay(day, -(windowDays - 1)), historyStart = shiftDay(start, -Math.min(28, 367 - windowDays))
+  useEffect(() => {
+    const controller = new AbortController()
+    async function load() {
+      setLoading(true); setError(null); setRecords([])
+      try {
+        const response = await fetch("/api/status", { signal: controller.signal })
+        if (!response.ok) throw new Error("Unable to load connection and coverage status.")
+        const nextStatus = await response.json() as ObservatoryStatus
+        if (!controller.signal.aborted) setStatus(nextStatus)
+        const all: OuraRecord[] = []
+        let offset: number | null = 0
+        while (offset !== null) {
+          const response = await fetch(`/api/records?start=${historyStart}&end=${day}&offset=${offset}`, { signal: controller.signal })
+          if (!response.ok) throw new Error("History could not be fully loaded. No partial charts are shown.")
+          const page = await response.json() as RecordsPage
+          all.push(...page.records); offset = page.nextOffset
+        }
+        if (!controller.signal.aborted) setRecords(all)
+      } catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Unable to load data") }
+      finally { if (!controller.signal.aborted) setLoading(false) }
     }
-  }, [windowDays])
-
-  useEffect(() => { void load() }, [load])
-  const points = useMemo(() => buildDailyPoints(records), [records])
+    void load()
+    return () => controller.abort()
+  }, [day, historyStart, refresh])
+  const allPoints = useMemo(() => buildDailyPoints(records), [records])
+  const points = useMemo(() => Array.from({ length: windowDays }, (_, index) => allPoints.find((point) => point.day === shiftDay(start, index)) ?? { day: shiftDay(start, index) }), [allPoints, start, windowDays])
+  const visibleRecords = records.filter((record) => { const date = recordDay(record) || (Number.isFinite(startTime(record)) ? localDay(new Date(startTime(record))) : ""); return date >= start && date <= day })
   const sync = async () => {
-    setSyncing(true)
-    setError(null)
+    setSyncing(true); setError(null)
     try {
-      const response = await fetch("/api/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ start: dateDaysAgo(windowDays), end: isoDate(new Date()) }) })
-      if (!response.ok) {
-        const body = await response.json() as { message?: string }
-        throw new Error(body.message ?? "Sync failed")
-      }
-      await load()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Sync failed")
-    } finally {
-      setSyncing(false)
-    }
+      const response = await fetch("/api/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ start: historyStart, end: day }) })
+      const result = await response.json() as { message?: string; skipped?: Record<string, string> }
+      if (!response.ok) throw new Error(result.message ?? "Sync failed")
+      setRefresh((value) => value + 1)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Sync failed") }
+    finally { setSyncing(false) }
   }
-
-  if (loading && !status) return <div className="boot"><div className="boot-ring" /><span>HYDRATING TELEMETRY PLANE</span></div>
-  if (!status) return <div className="boot error"><span>{error ?? "Observatory unavailable"}</span><button onClick={() => void load()}>Retry</button></div>
-
-  const view = activeTab === "Command" ? <CommandView points={points} />
-    : activeTab === "Sleep" ? <SleepView points={points} records={records} />
-    : activeTab === "Cardio" ? <CardioView points={points} records={records} />
-    : activeTab === "Activity" ? <ActivityView points={points} records={records} />
-    : activeTab === "Relations" ? <RelationsView points={points} />
-    : <DataView status={status} records={records} />
-
+  const syncIssues = Object.entries(status?.sync?.skipped ?? {})
   return <div className="app-shell">
-    <aside>
-      <div className="brand"><div className="brand-mark"><i /><i /><i /></div><div><strong>OURA // OBS</strong><span>BODY TELEMETRY</span></div></div>
-      <div className="connection"><span className={status.connected ? "live" : "idle"} />{status.connected ? "API CONNECTED" : "AUTH REQUIRED"}</div>
-      <nav>{tabs.map((tab) => <button className={tab === activeTab ? "active" : ""} onClick={() => setActiveTab(tab)} key={tab}><span>{tab.slice(0, 2).toUpperCase()}</span>{tab}</button>)}</nav>
-      <div className="control-block"><label>WINDOW</label><div className="window-buttons">{[7, 30, 90, 365].map((days) => <button className={days === windowDays ? "active" : ""} onClick={() => setWindowDays(days)} key={days}>{days === 365 ? "1Y" : `${days}D`}</button>)}</div></div>
-      <div className="ingest-block"><label>INGEST STATUS</label><div><span>Records</span><b>{status.records.toLocaleString()}</b></div><div><span>Datasets</span><b>{status.datasets.length}</b></div><small>Last sync<br />{status.last_sync?.replace("T", " ").slice(0, 19) ?? "never"}</small></div>
-      {status.connected ? <button className="primary" disabled={syncing} onClick={() => void sync()}>{syncing ? "SYNCING…" : "↻ SYNC OURA NOW"}</button> : <a className="primary" href="/oauth/start">CONNECT OURA</a>}
-      <div className="sidebar-foot"><span>MODE</span><b>{status.mode.toUpperCase()}</b><small>D1 · WORKERS · ACCESS</small></div>
-    </aside>
-    <main>
-      <header className="topbar"><div><span className="eyebrow">PERSONAL SYSTEMS TELEMETRY</span><h1>Body observability console</h1><p>{dateDaysAgo(windowDays)} → {isoDate(new Date())} · {points.length} daily partitions · {records.filter((record) => record.data_type === "heart_rate").length.toLocaleString()} HR events</p></div><div className="pipeline"><span /><div><b>PIPELINE HEALTHY</b><small>ACCESS PROTECTED</small></div></div></header>
-      {error && <div className="alert">{error}<button onClick={() => setError(null)}>×</button></div>}
-      <div className="metric-strip">
-        <Metric label="Readiness" value={latest(points, "readinessScore")} delta={metricDelta(points.map((point) => point.readinessScore))} />
-        <Metric label="Sleep score" value={latest(points, "sleepScore")} delta={metricDelta(points.map((point) => point.sleepScore))} />
-        <Metric label="Activity" value={latest(points, "activityScore")} delta={metricDelta(points.map((point) => point.activityScore))} />
-        <Metric label="HRV" value={latest(points, "averageHrv")} unit=" ms" delta={metricDelta(points.map((point) => point.averageHrv))} />
-        <Metric label="RHR min" value={latest(points, "lowestHeartRate")} unit=" bpm" delta={metricDelta(points.map((point) => point.lowestHeartRate))} inverse />
-        <Metric label="Sleep" value={latest(points, "totalSleepHours")} unit=" h" delta={metricDelta(points.map((point) => point.totalSleepHours))} />
-        <Metric label="SpO₂" value={latest(points, "averageSpo2")} unit="%" delta={metricDelta(points.map((point) => point.averageSpo2))} />
-        <Metric label="Temp Δ" value={latest(points, "temperatureDeviation")} unit="°C" delta={metricDelta(points.map((point) => point.temperatureDeviation))} inverse />
-      </div>
-      <div className="mobile-tabs">{tabs.map((tab) => <button className={tab === activeTab ? "active" : ""} onClick={() => setActiveTab(tab)} key={tab}>{tab}</button>)}</div>
-      {points.length === 0 && activeTab !== "Data" ? <div className="empty"><b>NO DAILY TELEMETRY IN THIS WINDOW</b><span>Widen the range, import the existing database, or sync Oura.</span></div> : view}
-      <footer>OURA OBSERVATORY · PROCESSED WELLNESS TELEMETRY · NOT RAW PPG OR ACCELEROMETER DATA · NOT MEDICAL ADVICE</footer>
+    <header className="site-header"><a className="brand" href="#" onClick={(event) => { event.preventDefault(); setTab("Today") }}><span className="brand-mark">◯</span><span>oura <b>observatory</b></span></a><span className="private-label">{!status ? "Connection unverified" : status.mode === "production" ? "Private · Access protected" : "Local preview · not production data"}</span></header>
+    <div className="toolbar"><nav aria-label="Main navigation">{tabs.map((name) => <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => setTab(name)}>{name}</button>)}</nav><div className="date-controls"><button aria-label="Previous day" onClick={() => setDay(shiftDay(day, -1))}>‹</button><label><span className="sr-only">Selected date</span><input type="date" value={day} max={today} onChange={(event) => { if (/^\d{4}-\d{2}-\d{2}$/.test(event.target.value) && event.target.value <= today) setDay(event.target.value) }} /></label><button aria-label="Next day" disabled={day >= today} onClick={() => setDay(shiftDay(day, 1))}>›</button><label><span className="sr-only">History range</span><select value={windowDays} onChange={(event) => setWindowDays(Number(event.target.value))}>{[7, 30, 90, 365].map((days) => <option key={days} value={days}>{days === 365 ? "1 year" : `${days} days`}</option>)}</select></label></div></div>
+    <main><div className="coverage-bar"><span>{loading ? "Loading complete history…" : !status ? "Connection status unavailable" : status.connected ? "Oura connected" : "Oura not connected"} · Eastern time</span><div><button onClick={() => setTab("Data")}>Coverage & sync {syncIssues.length ? `· ${syncIssues.length} issues` : "↗"}</button>{status?.connected ? <button disabled={syncing || loading} onClick={() => void sync()}>{syncing ? "Syncing…" : "Sync Oura"}</button> : <a href="/oauth/start">Connect Oura ↗</a>}</div></div>
+      {status && status.mode !== "production" && <p className="demo-notice">LOCAL PREVIEW · Records shown here are local/imported data, not verified production measurements. Review screenshots use the repository’s synthetic demo.</p>}
+      {syncIssues.length > 0 && <div className="alert" role="status">Last sync was incomplete: {syncIssues.map(([type, reason]) => `${type}: ${reason}`).join(" · ")}. See Data for coverage.</div>}
+      {error && <div className="alert" role="alert">{error} <button onClick={() => setRefresh((value) => value + 1)}>Retry</button></div>}
+      {tab === "Experiments" ? <Experiments /> : loading ? <div className="loading" role="status">Gathering your measurements…</div> : error && !records.length ? <Empty>Data unavailable. Retry above; incomplete results are not displayed.</Empty> : <>
+        {tab !== "Today" && <header className="page-title"><span className="eyebrow">{start} — {day}</span><h1>{{ Sleep: "Make room for rest.", Cardio: "Listen over the long run.", Activity: "Movement, in perspective.", Explore: "Curiosity, with context.", Data: "Know what you’re seeing." }[tab]}</h1></header>}
+        {tab === "Today" ? <><Brief points={allPoints} day={day} /><Timeline key={day} records={records} day={day} /><div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="A longer view of sleep" unit="h" /><Trend points={points} history={allPoints} metric="averageHrv" title="Your overnight HRV" unit="ms" color={palette[1]} /></div></>
+          : tab === "Sleep" ? <SleepView key={day} points={points} history={allPoints} records={records} day={day} />
+          : tab === "Cardio" ? <div className="dashboard-grid">{([
+            ["averageHrv", "Overnight HRV", "ms"], ["lowestHeartRate", "Lowest sleeping heart rate", "bpm"],
+            ["vascularAge", "Cardiovascular age", "years"], ["pulseWaveVelocity", "Pulse-wave velocity", "m/s"],
+            ["vo2Max", "VO₂ max", "ml/kg/min"], ["readinessScore", "Readiness score", "/ 100"],
+            ["averageSpo2", "Overnight oxygen saturation", "%"], ["temperatureDeviation", "Temperature deviation", "°C"]
+          ] as const).map(([metric, title, unit], index) => <Trend key={metric} points={points} history={allPoints} metric={metric} title={title} unit={unit} color={palette[index % palette.length]} />)}<Events records={visibleRecords} /></div>
+          : tab === "Activity" ? <div className="dashboard-grid">{([
+            ["steps", "Daily steps", "steps"], ["activeCalories", "Active energy", "kcal"],
+            ["stressHours", "Daily high-stress time", "h / day"], ["recoveryHours", "Daily recovery time", "h / day"],
+            ["activityScore", "Activity score", "/ 100"], ["mediumActivityHours", "Moderate activity", "h / day"]
+          ] as const).map(([metric, title, unit], index) => <Trend key={metric} points={points} history={allPoints} metric={metric} title={title} unit={unit} color={palette[index % palette.length]} />)}<Events records={visibleRecords} /></div>
+          : tab === "Explore" ? <Explore points={points} /> : status && <DataView status={status} records={visibleRecords} />}
+      </>}
+      <footer><span>Oura Observatory</span><span>Personal patterns, not medical advice. Missing data is never zero.</span></footer>
     </main>
   </div>
 }
