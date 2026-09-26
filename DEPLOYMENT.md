@@ -40,7 +40,24 @@ pnpm deploy:dry-run:production
 pnpm --filter @oura/dashboard-worker exec wrangler whoami
 ```
 
-Apply migrations and import the existing local records:
+## Routine updates
+
+Inspect pending migrations and record the current version as a rollback target.
+Apply approved migrations, then publish the UI and Worker together. Existing
+Worker secrets are preserved; do not regenerate or upload secrets for a routine
+code release, and never import synthetic preview data into production.
+
+```sh
+pnpm --filter @oura/dashboard-worker exec wrangler deployments list --env production
+pnpm --filter @oura/dashboard-worker exec wrangler d1 migrations list DB --env production --remote
+pnpm --filter @oura/dashboard-worker exec wrangler d1 migrations apply DB --env production --remote
+pnpm --filter @oura/dashboard-worker exec wrangler deploy --env production --strict --message "<reason>"
+```
+
+## Initial provisioning only
+
+These import and secret-preparation steps are not part of a routine update.
+Import only explicitly approved production records, never the local demo:
 
 ```sh
 # Apply all migrations, including the sync lock used by the Worker.
@@ -66,7 +83,19 @@ encryption key requires a planned token reauthorization or data re-encryption.
 
 Deploy only after the Access application protects the dashboard hostname.
 
-Current production version: `6c625744-ed77-48f8-8258-844b28f04e46`.
+## Latest release
+
+- Released 2026-09-26 from [1731d35](https://github.com/ronsanzone/oura-dashboard/commit/1731d35): Observatory overhaul and manual Experiment Lab.
+- Production version: `13a0d90c-ac62-4dec-a2bf-41faf7c8a352` (100% traffic).
+- Deployment ID: `3a65334b-742f-44a2-9556-41da79d468ca`.
+- Previous known-good version: `c5a7cc75-2e5f-4066-b74e-c7ecdafb62d9`.
+- Migration `0003_experiments.sql` applied; no pending migrations remain.
+- Existing Oura secrets retained; no record imports or Access policy changes.
+- Anonymous dashboard, status and experiment requests redirect to Access;
+  webhook-host experiment requests return 404; webhook health returns 200.
+  HTTP redirects to HTTPS; workers.dev and preview URLs remain disabled.
+- Authenticated owner UI/data verification remains to be performed through
+  the owner's Access session. No production health records were read for this release.
 
 ## Verification
 
