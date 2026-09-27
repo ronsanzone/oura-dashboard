@@ -8,7 +8,7 @@ import type { Experiment, ExperimentRevision, ExperimentSnapshot } from "@oura/s
 const plan: Experiment = { question: "Earlier dinner?", habit: "Finish by 7", primary: "averageHrv", supporting: [], rules: { followed: "by 7", partly: "by 8", not_followed: "later" }, beforeStart: "2026-03-06", beforeEnd: "2026-03-07", start: "2026-03-08", end: "2026-03-10", afterStart: "", afterEnd: "", alignment: 1, state: "active", checkIns: {}, conclusion: "", revisionNote: "Initial" }
 function database() {
   const db = new DatabaseSync(":memory:")
-  for (const file of ["0001_initial.sql", "0003_experiments.sql"]) db.exec(readFileSync(new URL(`../../../migrations/${file}`, import.meta.url), "utf8"))
+  for (const file of ["0001_initial.sql", "0003_experiments.sql", "0005_records_effective_date.sql"]) db.exec(readFileSync(new URL(`../../../migrations/${file}`, import.meta.url), "utf8"))
   const env = { DEPLOYMENT_MODE: "local", DB: { prepare(sql: string) {
     const statement = db.prepare(sql); let bindings: (string | number | null)[] = []
     return { bind(...v: typeof bindings) { bindings = v; return this }, async all() { return { results: statement.all(...bindings) } }, async first() { return statement.get(...bindings) ?? null }, async run() { return { meta: { changes: Number(statement.run(...bindings).changes) } } } }
@@ -22,7 +22,7 @@ describe("persistent experiment API", () => {
     try {
       const created = await request("", { experiment: plan }); expect(created.status).toBe(201)
       const first = await created.json() as ExperimentRevision
-      const add = (hrv: number) => db.prepare("INSERT OR REPLACE INTO records VALUES ('sleep','s','2026-03-09',NULL,NULL,?,'2026-03-11T12:00:00Z')").run(JSON.stringify({ day: "2026-03-09", average_hrv: hrv, total_sleep_duration: 20000 }))
+      const add = (hrv: number) => db.prepare("INSERT OR REPLACE INTO records VALUES ('sleep','s','2026-03-09',NULL,NULL,?,'2026-03-11T12:00:00Z','2026-03-09')").run(JSON.stringify({ day: "2026-03-09", average_hrv: hrv, total_sleep_duration: 20000 }))
       add(51)
       const snap = await (await request(`/${first.id}/snapshots`, { version: 1 })).json() as ExperimentSnapshot
       expect(snap.evidence.days.find(d => d.day === "2026-03-08")?.values.averageHrv).toBe(51)

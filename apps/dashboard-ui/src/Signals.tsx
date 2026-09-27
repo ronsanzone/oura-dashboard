@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
-import { shiftDay, type DailyPoint, type OuraRecord } from "@oura/shared"
+import { shiftDay, type DailyPoint } from "@oura/shared"
 import { contextTopics, type ContextRevision, type ContextTopic } from "@oura/shared/context"
 import { compareContext, contextInterval, contextPairs, stressSignal, type ContextPair } from "@oura/shared/signals"
 import { contextRequest, DayDebrief } from "./Debrief"
 
 const fmt = (v: number | null | undefined) => v == null ? "—" : v.toFixed(2)
-export function Signals({ points, start, end, records, onDirty }: { points: DailyPoint[]; start: string; end: string; records: OuraRecord[]; onDirty: (dirty: boolean) => void }) {
+export function Signals({ points, start, end, onDirty }: { points: DailyPoint[]; start: string; end: string; onDirty: (dirty: boolean) => void }) {
   const [reviewing, setReviewing] = useState(false), [reviewDay, setReviewDay] = useState(end)
   const [context, setContext] = useState<ContextRevision[]>([]), [error, setError] = useState(""), [loading, setLoading] = useState(true)
   const [topic, setTopic] = useState<ContextTopic>("evening_work"), [lag, setLag] = useState<0 | 1>(0)
@@ -32,7 +32,7 @@ export function Signals({ points, start, end, records, onDirty }: { points: Dail
     {reviewing && <div className="daily-debrief signal-review">
       <label className="debrief-date">Day to review · Eastern<input type="date" min={start} max={end} value={reviewDay} onChange={e => { if (e.target.value >= start && e.target.value <= end && confirm("Switch review days? Any unsaved draft will be discarded.")) setReviewDay(e.target.value) }} /></label>
       <p className="caption">Use an Oura tag comment below, or write the context you remember. Copying a comment replaces the draft but sends nothing. All dates in the selected window are available; no days are ranked by outcomes.</p>
-      <DayDebrief key={reviewDay} day={reviewDay} records={records} onDirty={onDirty} retrospective onSaved={r => { setContext(previous => [...previous.filter(c => c.day !== r.day), r].sort((a, b) => a.day.localeCompare(b.day))); setComparison(null) }} />
+      <DayDebrief key={reviewDay} day={reviewDay} onDirty={onDirty} retrospective onSaved={r => { setContext(previous => [...previous.filter(c => c.day !== r.day), r].sort((a, b) => a.day.localeCompare(b.day))); setComparison(null) }} />
     </div>}
     <h3>Choose the comparison before looking.</h3><p>Only human-accepted labels are used. Comparisons make no inference calls; no exposures or lags are ranked by their result.</p>
     <div className="select-row"><label>Context to compare<select value={topic} onChange={e => { setTopic(e.target.value as ContextTopic); setComparison(null) }}>{(Object.keys(contextTopics) as ContextTopic[]).map(k => <option key={k} value={k}>{contextTopics[k][0]}</option>)}</select></label><label>Declared pairing<select value={lag} onChange={e => { setLag(Number(e.target.value) as 0 | 1); setComparison(null) }}><option value={0}>Context → same-day stress</option><option value={1}>Context → next-day stress</option></select></label></div>

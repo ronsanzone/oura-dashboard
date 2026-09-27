@@ -11,7 +11,7 @@ afterEach(() => { for (const db of databases.splice(0)) db.close() })
 const plan: Experiment = { question: "PRIVATE OUTCOME QUESTION", habit: "Finish work before dinner", primary: "averageHrv", supporting: [], rules: { followed: "No work after dinner", partly: "Up to 15 minutes after dinner", not_followed: "More than 15 minutes after dinner" }, beforeStart: "2026-03-06", beforeEnd: "2026-03-07", start: "2026-03-08", end: "2026-03-10", afterStart: "", afterEnd: "", alignment: 1, state: "active", checkIns: {}, conclusion: "PRIVATE RESULT", revisionNote: "Initial" }
 function setup() {
   const db = new DatabaseSync(":memory:"); databases.push(db)
-  for (const file of ["0001_initial.sql", "0003_experiments.sql", "0004_context.sql"]) db.exec(readFileSync(new URL(`../../../migrations/${file}`, import.meta.url), "utf8"))
+  for (const file of ["0001_initial.sql", "0003_experiments.sql", "0004_context.sql", "0005_records_effective_date.sql"]) db.exec(readFileSync(new URL(`../../../migrations/${file}`, import.meta.url), "utf8"))
   const run = vi.fn(async (_model: string, input: { state: unknown; questions: Record<string, unknown> }) => ({ state: "Completed", result: {
     model: "jev-1.13.0", usage: { input_tokens: 1000, output_tokens: 200 }, answers: Object.fromEntries(Object.keys(input.questions).map(k => [k, { type: "choice", choice: k === "adherence" ? "not_followed" : k === "evening_work" ? "present" : "unknown", confidence: 0.9,
       probabilities: k === "adherence" ? { followed: 0, partly: 0, not_followed: 0.9, unknown: 0.1 } : k === "evening_work" ? { present: 0.9, absent: 0, unknown: 0.1, conflicting: 0 } : { present: 0, absent: 0, unknown: 1, conflicting: 0 } }]))

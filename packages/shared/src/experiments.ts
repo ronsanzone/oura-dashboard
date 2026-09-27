@@ -1,4 +1,4 @@
-import { buildDailyPoints, localDay, shiftDay, type DailyPoint, type OuraRecord } from "./index"
+import { buildDailyPoints, effectiveDay, localDay, shiftDay, type DailyPoint, type OuraRecord } from "./index"
 import type { ContextLabels, ContextProposal } from "./context"
 
 export const experimentMetrics = {
@@ -69,7 +69,7 @@ export function experimentEvidence(experiment: Experiment, records: OuraRecord[]
   const today = localDay(new Date(asOf)), points = new Map(buildDailyPoints(records).map(p => [p.day, p]))
   const context = new Map<string, string[]>()
   for (const r of records.filter(r => ["tag", "workout", "session"].includes(r.data_type))) {
-    const day = String(r.payload.start_day ?? r.payload.day ?? r.record_date ?? (r.start_datetime ? localDay(new Date(r.start_datetime)) : ""))
+    const day = effectiveDay(r)
     const label = String(r.payload.comment || r.payload.custom_name || r.payload.tag_type_code || r.payload.activity || r.payload.type || r.data_type)
     context.set(day, [...(context.get(day) ?? []), label])
   }

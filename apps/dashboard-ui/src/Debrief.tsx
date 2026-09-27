@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { traceJev } from "./JevDebug"
-import { localDay, type OuraRecord } from "@oura/shared"
+import { loadSelectedDay } from "./data"
+import { effectiveDay, localDay, type OuraRecord } from "@oura/shared"
 import { contextLabels, contextTopics, proposedLabels, selectFollowUps, type ContextLabel, type ContextLabels, type ContextProposal, type ContextRevision, type ContextTopic } from "@oura/shared/context"
 
 export async function contextRequest<T>(path: string, body?: unknown, method = "POST"): Promise<T> {
@@ -27,8 +28,9 @@ export function ProposalSource({ proposal }: { proposal: ContextProposal }) {
   </details>
 }
 
-export function DayDebrief({ day, records, onDirty, retrospective = false, onSaved }: { day: string; records: OuraRecord[]; onDirty: (dirty: boolean) => void; retrospective?: boolean; onSaved?: (revision: ContextRevision) => void }) {
+export function DayDebrief({ day, onDirty, retrospective = false, onSaved }: { day: string; onDirty: (dirty: boolean) => void; retrospective?: boolean; onSaved?: (revision: ContextRevision) => void }) {
   const [saved, setSaved] = useState<ContextRevision | null>(null), [history, setHistory] = useState<ContextRevision[]>([])
+  const [records, setRecords] = useState<OuraRecord[]>([]), [recordsLoading, setRecordsLoading] = useState(true), [recordsError, setRecordsError] = useState("")
   const [note, setNote] = useState(""), [responses, setResponses] = useState<ContextProposal["input"]["responses"]>({})
   const [proposal, setProposal] = useState<ContextProposal | null>(null), [labels, setLabels] = useState<ContextLabels | null>(null)
   const [consent, setConsent] = useState(false), [medications, setMedications] = useState(false), [followUps, setFollowUps] = useState<ContextTopic[]>([])
@@ -47,6 +49,14 @@ export function DayDebrief({ day, records, onDirty, retrospective = false, onSav
   }
   const run = async (work: () => Promise<void>) => { setBusy(true); setError(""); setNotice(""); try { await work() } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }
   useEffect(() => { void run(load) }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+    setRecordsLoading(true); setRecordsError(""); setRecords([])
+    void loadSelectedDay(fetch, day, controller.signal).then(result => { if (!controller.signal.aborted) setRecords(result.records) })
+      .catch(e => { if (!controller.signal.aborted) setRecordsError(e instanceof Error ? e.message : "Oura tags are unavailable.") })
+      .finally(() => { if (!controller.signal.aborted) setRecordsLoading(false) })
+    return () => controller.abort()
+  }, [day])
   const classify = async () => run(async () => {
     if (retrospective && proposal && note === proposal.input.note && JSON.stringify(responses) === JSON.stringify(proposal.input.responses)) {
       setFollowUps(selectFollowUps(proposal.answers, Object.keys(responses), medications))
@@ -59,7 +69,7 @@ export function DayDebrief({ day, records, onDirty, retrospective = false, onSav
     setNotice("Jev’s proposal is ready. Review it before saving; nothing has been accepted yet.")
   })
   const stale = !!proposal && (note !== proposal.input.note || JSON.stringify(responses) !== JSON.stringify(proposal.input.responses))
-  const tags = records.filter(r => r.data_type === "tag" && String(r.payload.start_day ?? r.payload.day ?? r.record_date) === day && typeof r.payload.comment === "string" && r.payload.comment.trim())
+  const tags = records.filter(r => r.data_type === "tag" && effectiveDay(r) === day && typeof r.payload.comment === "string" && r.payload.comment.trim())
   return <div aria-busy={busy}>
     {retrospective && <p className="context-notice">Retrospective review · {day}. Existing accepted context loads without inference. Review one day at a time, including ordinary days—not only unusual outcomes. Remove measured results from the text before sending. New classifications are marked retrospective.</p>}
     {error && <div className="alert" role="alert">{error}<p>Your draft is still here. Copy it before reloading.</p><button disabled={busy} onClick={() => { if (!dirty || confirm("Discard unsaved edits and reload this day?")) void run(load) }}>Reload saved day</button></div>}
@@ -71,6 +81,8 @@ export function DayDebrief({ day, records, onDirty, retrospective = false, onSav
         <p>A few sentences is enough. What happened, what changed, what did you do? Leave scores and measured outcomes out of this note.</p>
         <label>Your day, in your words<textarea disabled={busy || !loaded} maxLength={4000} value={note} onChange={e => setNote(e.target.value)} placeholder="Start with the things you want to remember…" /></label>
         <span className="caption">{note.length}/4,000 characters · Nothing is sent while you type.</span>
+        {recordsLoading && <p className="caption" role="status">Loading Oura tags for this day…</p>}
+        {recordsError && <p className="caption warning">Oura tags unavailable. This does not mean none were logged.</p>}
         {!!tags.length && <details><summary>Use an Oura tag comment · {tags.length}</summary>{tags.map(t => <button key={t.record_id} disabled={busy} onClick={() => setNote(String(t.payload.comment).slice(0, 4000))}>Copy comment: {String(t.payload.comment)}</button>)}<p className="caption">Copies into your draft only. Review before sending.</p></details>}
         <div className="debrief-permissions"><label><input type="checkbox" checked={medications} disabled={busy} onChange={e => setMedications(e.target.checked)} />Allow optional medication follow-up questions</label><p className="caption">Adderall and Zepbound use may be classified if you mention them. No doses, schedules, or treatment advice are inferred.</p>
           <label><input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} />Send this note and answers to Jev through Cloudflare, and store the source and proposal privately for review.</label></div>
@@ -91,10 +103,10 @@ export function DayDebrief({ day, records, onDirty, retrospective = false, onSav
     {!!history.length && <details className="panel"><summary>Revision history · {history.length} accepted versions</summary>{history.map(r => <details key={r.version}><summary>v{r.version} · {r.reason} · {new Date(r.savedAt).toLocaleString()}</summary><p>{(Object.keys(contextTopics) as ContextTopic[]).map(k => `${contextTopics[k][0]}: ${r.labels[k]}`).join(" · ")}</p><ProposalSource proposal={r.proposal} /></details>)}</details>}
   </div>
 }
-export function Debrief({ records, onDirty }: { records: OuraRecord[]; onDirty: (dirty: boolean) => void }) {
+export function Debrief({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const [day, setDay] = useState(localDay(new Date()))
   return <div className="daily-debrief"><header className="page-title"><span className="eyebrow">DAILY DEBRIEF · WITH JEV</span><h1>Your day has a story.<br />Keep the useful parts.</h1><p>A small conversation. An editable record. Always your final say.</p></header>
     <label className="debrief-date">Day to remember · Eastern<input type="date" value={day} max={localDay(new Date())} onChange={e => { if (e.target.value && e.target.value <= localDay(new Date()) && confirm("Switch dates? Any unsaved draft will be discarded.")) setDay(e.target.value) }} /></label>
-    <DayDebrief key={day} day={day} records={records} onDirty={onDirty} />
+    <DayDebrief key={day} day={day} onDirty={onDirty} />
   </div>
 }

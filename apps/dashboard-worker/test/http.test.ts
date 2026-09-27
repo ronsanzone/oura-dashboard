@@ -42,12 +42,27 @@ describe("HTTP responses", () => {
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
 
-  it("protects production UI and both read APIs before touching storage", async () => {
+  it("protects production UI and read APIs before touching storage", async () => {
     const env = { DEPLOYMENT_MODE: "production", DASHBOARD_HOSTNAME: "oura.example" } as unknown as AppEnv
-    for (const path of ["/", "/api/status", "/api/records"]) {
+    for (const path of ["/", "/api/status", "/api/records", "/api/daily-summaries?start=2026-09-01&end=2026-09-02", "/api/days/2026-09-02"]) {
       const response = await worker.fetch(new Request(`https://oura.example${path}`), env, {} as ExecutionContext)
       expect(response.status).toBe(403)
       expect(await response.json()).toMatchObject({ error: "access_denied" })
+    }
+  })
+
+  it("validates summary ranges, selected days and opaque record cursors before querying D1", async () => {
+    const env = { DEPLOYMENT_MODE: "local" } as unknown as AppEnv
+    const cases = [
+      ["/api/daily-summaries", "missing_date_range"],
+      ["/api/daily-summaries?start=2026-09-03&end=2026-09-01", "invalid_date_range"],
+      ["/api/days/2026-13-40", "invalid_date"],
+      ["/api/records?cursor=not-a-cursor", "invalid_cursor"]
+    ]
+    for (const [path, error] of cases) {
+      const response = await worker.fetch(new Request(`http://localhost${path}`), env, {} as ExecutionContext)
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ error })
     }
   })
 

@@ -3,7 +3,7 @@ import { localDay } from "@oura/shared"
 import { errorResponse, HttpError, json, readBoundedText } from "./http.js"
 import { exchangeAuthorizationCode, syncOura } from "./oura.js"
 import { requireAccessIdentity, requireSameOrigin, secureResponse } from "./security.js"
-import { records, status } from "./storage.js"
+import { dailySummaries, InvalidRecordsCursorError, records, selectedDay, status } from "./storage.js"
 import { experimentsApi } from "./experiments.js"
 import { jevApi } from "./jev.js"
 import { contextApi } from "./context.js"
@@ -119,6 +119,19 @@ const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> =
   if (url.pathname === "/api/context" || url.pathname.startsWith("/api/context/")) return contextApi(request, env, url)
   if (url.pathname === "/api/experiments" || url.pathname.startsWith("/api/experiments/")) return experimentsApi(request, env, url)
   if (url.pathname === "/api/status" && request.method === "GET") return json(await status(env))
+  if (url.pathname === "/api/daily-summaries" && request.method === "GET") {
+    const start = url.searchParams.get("start")
+    const end = url.searchParams.get("end")
+    if (!start || !end) throw new HttpError(400, "missing_date_range", "Start and end dates are required")
+    validateDateRange(start, end)
+    return json(await dailySummaries(env, { start, end }))
+  }
+  const selectedDayMatch = /^\/api\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname)
+  if (selectedDayMatch && request.method === "GET") {
+    const day = selectedDayMatch[1]!
+    if (!validDate(day)) throw new HttpError(400, "invalid_date", "Date must use YYYY-MM-DD")
+    return json(await selectedDay(env, day))
+  }
   if (url.pathname === "/api/records" && request.method === "GET") {
     const start = url.searchParams.get("start") ?? undefined
     const end = url.searchParams.get("end") ?? undefined
@@ -127,9 +140,14 @@ const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> =
       throw new HttpError(400, "invalid_date", "Dates must use YYYY-MM-DD")
     }
     if (start && end) validateDateRange(start, end)
-    const offset = Number(url.searchParams.get("offset") ?? 0)
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, "invalid_offset", "Offset must be a non-negative integer")
-    return json(await records(env, { start, end, type, offset }))
+    const cursor = url.searchParams.get("cursor") ?? undefined
+    if (cursor && cursor.length > 2048) throw new HttpError(400, "invalid_cursor", "Records cursor is invalid")
+    try {
+      return json(await records(env, { start, end, type, cursor }))
+    } catch (error) {
+      if (error instanceof InvalidRecordsCursorError) throw new HttpError(400, "invalid_cursor", error.message)
+      throw error
+    }
   }
   if (url.pathname === "/api/sync" && request.method === "POST") {
     requireSameOrigin(request)

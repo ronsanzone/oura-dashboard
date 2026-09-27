@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
-import { baselineFor, buildDailyPoints, indexRecordRange, indexRecords, localDay, shiftDay, type DailyPoint, type ObservatoryStatus, type OuraRecord, type RecordsPage } from "@oura/shared"
+import { baselineFor, indexRecordRange, indexRecords, localDay, shiftDay, type DailyPoint, type ObservatoryStatus, type OuraRecord } from "@oura/shared"
 import { Empty, fmt, palette, Timeline, Trend } from "./Dashboard"
 import { JevDebug } from "./JevDebug"
+import { DashboardSkeleton, TimelineSkeleton } from "./Loading"
+import { loadCompleteHistory, loadDailySummaries, loadSelectedDay, loadStatus } from "./data"
 
 const SleepView = lazy(() => import("./SleepView").then(({ SleepView }) => ({ default: SleepView })))
 const CardioView = lazy(() => import("./MetricViews").then(({ CardioView }) => ({ default: CardioView })))
@@ -44,64 +46,97 @@ export function App() {
   const [day, setDay] = useState(today), [windowDays, setWindowDays] = useState(30), [tab, setTab] = useState<Tab>("Today")
   const [debriefDirty, setDebriefDirty] = useState(false)
   const changeTab = (next: Tab) => { if (next !== tab && (!debriefDirty || confirm("Leave context review? Your unsaved draft or pending result will be discarded."))) setTab(next) }
-  const [status, setStatus] = useState<ObservatoryStatus | null>(null), [records, setRecords] = useState<OuraRecord[]>([])
-  const [loading, setLoading] = useState(true), [error, setError] = useState<string | null>(null), [syncing, setSyncing] = useState(false), [refresh, setRefresh] = useState(0)
+  const [status, setStatus] = useState<ObservatoryStatus | null>(null), [statusError, setStatusError] = useState<string | null>(null)
+  const [allPoints, setAllPoints] = useState<DailyPoint[]>([]), [summariesLoading, setSummariesLoading] = useState(true), [summariesError, setSummariesError] = useState<string | null>(null), [summariesKey, setSummariesKey] = useState("")
+  const [dayRecords, setDayRecords] = useState<OuraRecord[]>([]), [dayLoading, setDayLoading] = useState(true), [dayError, setDayError] = useState<string | null>(null), [dayKey, setDayKey] = useState("")
+  const [completeRecords, setCompleteRecords] = useState<OuraRecord[]>([]), [completeLoading, setCompleteLoading] = useState(false), [completeError, setCompleteError] = useState<string | null>(null), [completeKey, setCompleteKey] = useState("")
+  const [actionError, setActionError] = useState<string | null>(null), [syncing, setSyncing] = useState(false), [refresh, setRefresh] = useState(0)
   const start = shiftDay(day, -(windowDays - 1)), historyStart = shiftDay(start, -Math.min(28, 367 - windowDays))
+  const needsSelectedDay = tab === "Today" || tab === "Sleep"
+  const needsCompleteHistory = tab === "Cardio" || tab === "Activity" || tab === "Data"
+  const expectedSummariesKey = `${historyStart}:${day}:${refresh}`, expectedDayKey = `${day}:${refresh}`, expectedCompleteKey = `${start}:${day}:${refresh}`
+  const summariesPending = summariesLoading || (summariesKey !== expectedSummariesKey && !summariesError)
+  const dayPending = dayLoading || (dayKey !== expectedDayKey && !dayError)
+  const completePending = completeLoading || (completeKey !== expectedCompleteKey && !completeError)
+
   useEffect(() => {
     const controller = new AbortController()
-    async function load() {
-      setLoading(true); setError(null); setRecords([])
-      try {
-        const response = await fetch("/api/status", { signal: controller.signal })
-        if (!response.ok) throw new Error("Unable to load connection and coverage status.")
-        const nextStatus = await response.json() as ObservatoryStatus
-        if (!controller.signal.aborted) setStatus(nextStatus)
-        const all: OuraRecord[] = []
-        let offset: number | null = 0
-        while (offset !== null) {
-          const response = await fetch(`/api/records?start=${historyStart}&end=${day}&offset=${offset}`, { signal: controller.signal })
-          if (!response.ok) throw new Error("History could not be fully loaded. No partial charts are shown.")
-          const page = await response.json() as RecordsPage
-          all.push(...page.records); offset = page.nextOffset
-        }
-        if (!controller.signal.aborted) setRecords(all)
-      } catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Unable to load data") }
-      finally { if (!controller.signal.aborted) setLoading(false) }
-    }
-    void load()
+    setStatusError(null)
+    void loadStatus(fetch, controller.signal).then((next) => { if (!controller.signal.aborted) setStatus(next) })
+      .catch((reason) => { if (!controller.signal.aborted) setStatusError(reason instanceof Error ? reason.message : "Connection status is unavailable.") })
+    return () => controller.abort()
+  }, [refresh])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setSummariesLoading(true); setSummariesError(null); setSummariesKey(""); setAllPoints([])
+    void loadDailySummaries(fetch, historyStart, day, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) { setAllPoints(result.days); setSummariesKey(expectedSummariesKey) } })
+      .catch((reason) => { if (!controller.signal.aborted) setSummariesError(reason instanceof Error ? reason.message : "Daily history is unavailable.") })
+      .finally(() => { if (!controller.signal.aborted) setSummariesLoading(false) })
     return () => controller.abort()
   }, [day, historyStart, refresh])
-  const allPoints = useMemo(() => buildDailyPoints(records), [records])
+
+  useEffect(() => {
+    if (!needsSelectedDay || dayKey === expectedDayKey) return
+    const controller = new AbortController()
+    setDayLoading(true); setDayError(null); setDayKey(""); setDayRecords([])
+    void loadSelectedDay(fetch, day, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) { setDayRecords(result.records); setDayKey(expectedDayKey) } })
+      .catch((reason) => { if (!controller.signal.aborted) setDayError(reason instanceof Error ? reason.message : "Selected-day detail is unavailable.") })
+      .finally(() => { if (!controller.signal.aborted) setDayLoading(false) })
+    return () => controller.abort()
+  }, [day, needsSelectedDay, refresh])
+
+  useEffect(() => {
+    if (!needsCompleteHistory || completeKey === expectedCompleteKey) return
+    const controller = new AbortController()
+    setCompleteLoading(true); setCompleteError(null); setCompleteKey(""); setCompleteRecords([])
+    void loadCompleteHistory(fetch, start, day, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) { setCompleteRecords(result); setCompleteKey(expectedCompleteKey) } })
+      .catch((reason) => { if (!controller.signal.aborted) setCompleteError(reason instanceof Error ? reason.message : "Complete record history is unavailable.") })
+      .finally(() => { if (!controller.signal.aborted) setCompleteLoading(false) })
+    return () => controller.abort()
+  }, [day, needsCompleteHistory, refresh, start])
+
   const points = useMemo(() => Array.from({ length: windowDays }, (_, index) => allPoints.find((point) => point.day === shiftDay(start, index)) ?? { day: shiftDay(start, index) }), [allPoints, start, windowDays])
-  const recordIndex = useMemo(() => indexRecords(records), [records])
+  const dayRecordIndex = useMemo(() => indexRecords(dayRecords), [dayRecords])
+  const recordIndex = useMemo(() => indexRecords(completeRecords), [completeRecords])
   const visibleRecordIndex = useMemo(() => indexRecordRange(recordIndex, start, day), [recordIndex, start, day])
   const sync = async () => {
     if (debriefDirty && !confirm("Sync will refresh this view. Discard your unsaved context draft or pending result?")) return
-    setSyncing(true); setError(null)
+    setSyncing(true); setActionError(null)
     try {
       const response = await fetch("/api/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ start: historyStart, end: day }) })
       const result = await response.json() as { message?: string; skipped?: Record<string, string> }
       if (!response.ok) throw new Error(result.message ?? "Sync failed")
       setRefresh((value) => value + 1)
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Sync failed") }
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : "Sync failed") }
     finally { setSyncing(false) }
   }
   const syncIssues = Object.entries(status?.sync?.skipped ?? {})
+  const retry = () => setRefresh((value) => value + 1)
+  const connectionLabel = summariesPending ? "Loading daily summaries…" : needsSelectedDay && dayPending ? "Daily summaries ready · loading selected day…" : !status ? "Connection status unavailable" : status.connected ? "Oura connected" : "Oura not connected"
+  const selectedDayUnavailable = <section className="panel timeline detail-unavailable"><header className="panel-head"><div><span className="eyebrow">THE BODY TIMELINE</span><h2>Selected-day detail unavailable.</h2></div></header><p>{dayError}</p><p className="caption">This is not the same as a day with no measurements. Retry before interpreting the gap.</p><button onClick={retry}>Retry selected day</button></section>
+  const pageTitle = tab !== "Today" && tab !== "Debrief" && tab !== "Experiments" ? <header className="page-title"><span className="eyebrow">{start} — {day}</span><h1>{{ Sleep: "Make room for rest.", Cardio: "Listen over the long run.", Activity: "Movement, in perspective.", Explore: "Curiosity, with context.", Data: "Know what you’re seeing." }[tab]}</h1></header> : null
+
   return <div className="app-shell">
     <header className="site-header"><a className="brand" href="#" onClick={(event) => { event.preventDefault(); changeTab("Today") }}><span className="brand-mark">◯</span><span>oura <b>observatory</b></span></a><span className="private-label">{!status ? "Connection unverified" : status.mode === "production" ? "Private · Access protected" : "Local preview · not production data"}</span></header>
     <div className="toolbar"><nav aria-label="Main navigation">{tabs.map((name) => <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => changeTab(name)}>{name}</button>)}</nav><fieldset className="date-controls" disabled={debriefDirty} title={debriefDirty ? "Save or close your context draft before changing the history window" : undefined}><button aria-label="Previous day" onClick={() => setDay(shiftDay(day, -1))}>‹</button><label><span className="sr-only">Selected date</span><input type="date" value={day} max={today} onChange={(event) => { if (/^\d{4}-\d{2}-\d{2}$/.test(event.target.value) && event.target.value <= today) setDay(event.target.value) }} /></label><button aria-label="Next day" disabled={day >= today} onClick={() => setDay(shiftDay(day, 1))}>›</button><label><span className="sr-only">History range</span><select value={windowDays} onChange={(event) => setWindowDays(Number(event.target.value))}>{[7, 30, 90, 365].map((days) => <option key={days} value={days}>{days === 365 ? "1 year" : `${days} days`}</option>)}</select></label></fieldset></div>
-    <main><div className="coverage-bar"><span>{loading ? "Loading complete history…" : !status ? "Connection status unavailable" : status.connected ? "Oura connected" : "Oura not connected"} · Eastern time</span><div><button onClick={() => changeTab("Data")}>Coverage & sync {syncIssues.length ? `· ${syncIssues.length} issues` : "↗"}</button>{status?.connected ? <button disabled={syncing || loading} onClick={() => void sync()}>{syncing ? "Syncing…" : "Sync Oura"}</button> : <a href="/oauth/start">Connect Oura ↗</a>}</div></div>
-      {status && status.mode !== "production" && <p className="demo-notice">LOCAL PREVIEW · Records shown here are local/imported data, not verified production measurements. Review screenshots use the repository’s synthetic demo.</p>}
+    <main><div className="coverage-bar"><span>{connectionLabel} · Eastern time</span><div><button onClick={() => changeTab("Data")}>Coverage & sync {syncIssues.length ? `· ${syncIssues.length} issues` : "↗"}</button>{status?.connected ? <button disabled={syncing || summariesPending} onClick={() => void sync()}>{syncing ? "Syncing…" : "Sync Oura"}</button> : <a href="/oauth/start">Connect Oura ↗</a>}</div></div>
+      <p className="demo-notice">{!status ? "VERIFYING DATA SOURCE · Measurements remain private while connection status loads." : status.mode !== "production" ? "LOCAL PREVIEW · Records shown here are local/imported data, not verified production measurements. Review screenshots use the repository’s synthetic demo." : "PRIVATE DATA · Access protected. Measurements are loaded for this session only and are not persisted in the browser."}</p>
       {syncIssues.length > 0 && <div className="alert" role="status">Last sync was incomplete: {syncIssues.map(([type, reason]) => `${type}: ${reason}`).join(" · ")}. See Data for coverage.</div>}
-      {error && <div className="alert" role="alert">{error} <button onClick={() => setRefresh((value) => value + 1)}>Retry</button></div>}
+      {(actionError || statusError) && <div className="alert" role="alert">{actionError ?? statusError} <button onClick={retry}>Retry</button></div>}
       <Suspense fallback={<ViewLoading tab={tab} />}>
-        {tab === "Debrief" ? <Debrief records={records} onDirty={setDebriefDirty} /> : tab === "Experiments" ? <Experiments /> : loading ? <div className="loading" role="status">Gathering your measurements…</div> : error && !records.length ? <Empty>Data unavailable. Retry above; incomplete results are not displayed.</Empty> : <>
-          {tab !== "Today" && <header className="page-title"><span className="eyebrow">{start} — {day}</span><h1>{{ Sleep: "Make room for rest.", Cardio: "Listen over the long run.", Activity: "Movement, in perspective.", Explore: "Curiosity, with context.", Data: "Know what you’re seeing." }[tab]}</h1></header>}
-          {tab === "Today" ? <><Brief points={allPoints} day={day} /><Timeline key={day} index={recordIndex} day={day} /><div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="A longer view of sleep" unit="h" /><Trend points={points} history={allPoints} metric="averageHrv" title="Your overnight HRV" unit="ms" color={palette[1]} /></div></>
-            : tab === "Sleep" ? <SleepView key={day} points={points} history={allPoints} index={recordIndex} day={day} />
-            : tab === "Cardio" ? <CardioView points={points} history={allPoints} index={visibleRecordIndex} />
-            : tab === "Activity" ? <ActivityView points={points} history={allPoints} index={visibleRecordIndex} />
-            : tab === "Explore" ? <ExploreView points={points} history={allPoints} start={start} end={day} index={visibleRecordIndex} onDirty={setDebriefDirty} /> : status && <DataView status={status} index={visibleRecordIndex} />}
+        {tab === "Debrief" ? <Debrief onDirty={setDebriefDirty} /> : tab === "Experiments" ? <Experiments /> : <>
+          {pageTitle}
+          {tab === "Data" ? completePending ? <DashboardSkeleton /> : completeError ? <Empty>{completeError} No partial coverage is displayed.</Empty> : status ? <DataView status={status} index={visibleRecordIndex} /> : <Empty>Connection and coverage status is unavailable.</Empty>
+            : summariesPending ? <DashboardSkeleton today={tab === "Today"} /> : summariesError ? <Empty>{summariesError} Retry above; incomplete summaries are not displayed.</Empty>
+            : tab === "Today" ? <><Brief points={allPoints} day={day} />{dayPending ? <TimelineSkeleton /> : dayError ? selectedDayUnavailable : <Timeline key={day} index={dayRecordIndex} day={day} />}<div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="A longer view of sleep" unit="h" /><Trend points={points} history={allPoints} metric="averageHrv" title="Your overnight HRV" unit="ms" color={palette[1]} /></div></>
+            : tab === "Sleep" ? dayPending ? <><TimelineSkeleton /><div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="Main sleep duration" unit="h" /><Trend points={points} history={allPoints} metric="sleepScore" title="Sleep score" unit="/ 100" color={palette[2]} /></div></> : dayError ? selectedDayUnavailable : <SleepView key={day} points={points} history={allPoints} index={dayRecordIndex} day={day} />
+            : tab === "Cardio" ? <CardioView points={points} history={allPoints} index={visibleRecordIndex} loading={completePending} error={completeError} />
+            : tab === "Activity" ? <ActivityView points={points} history={allPoints} index={visibleRecordIndex} loading={completePending} error={completeError} />
+            : <ExploreView points={points} history={allPoints} start={start} end={day} onDirty={setDebriefDirty} />}
         </>}
       </Suspense>
       <JevDebug />

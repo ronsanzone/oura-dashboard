@@ -18,11 +18,11 @@ const evidenceFor = async (env: AppEnv, r: ExperimentRevision) => {
   const all: OuraRecord[] = []
   // Daily measures and context only: do not download a year of intraday HR samples.
   for (const type of ["sleep", "daily_sleep", "daily_readiness", "daily_activity", "daily_stress", "daily_spo2", "cardiovascular_age", "vo2_max", "tag", "workout", "session"]) {
-    let offset: number | null = 0
+    let cursor: string | null = null
     do {
-      const page = await records(env, { type, start: r.experiment.beforeStart, end: shiftDay(r.experiment.afterEnd || r.experiment.end, r.experiment.alignment), offset })
-      all.push(...page.records); offset = page.nextOffset
-    } while (offset !== null)
+      const page = await records(env, { type, start: r.experiment.beforeStart, end: shiftDay(r.experiment.afterEnd || r.experiment.end, r.experiment.alignment), cursor: cursor ?? undefined })
+      all.push(...page.records); cursor = page.nextCursor
+    } while (cursor !== null)
   }
   return experimentEvidence(r.experiment, all, new Date().toISOString())
 }

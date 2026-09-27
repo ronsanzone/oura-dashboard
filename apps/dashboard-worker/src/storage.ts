@@ -1,4 +1,14 @@
-import { dayStart, shiftDay, type DatasetCount, type ObservatoryStatus, type RecordsPage } from "@oura/shared"
+import {
+  buildDailyPoints,
+  effectiveDay,
+  shiftDay,
+  type DailySummariesResponse,
+  type DatasetCount,
+  type ObservatoryStatus,
+  type OuraRecord,
+  type RecordsPage,
+  type SelectedDayResponse
+} from "@oura/shared"
 import { decrypt, encrypt, randomState, sha256 } from "./crypto.js"
 import type { AppEnv, StoredTokens } from "./types.js"
 
@@ -10,19 +20,46 @@ type RecordRow = {
   end_datetime: string | null
   payload_json: string
   synced_at: string
+  effective_date: string
 }
+
+type RecordKey = { effectiveDate: string; dataType: string; recordId: string }
+export class InvalidRecordsCursorError extends Error {}
+
+const encodeCursor = (row: RecordRow): string => {
+  const bytes = new TextEncoder().encode(JSON.stringify([row.effective_date, row.data_type, row.record_id]))
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")
+}
+
+const decodeCursor = (cursor: string): RecordKey => {
+  try {
+    const base64 = cursor.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(cursor.length / 4) * 4, "=")
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== 3 || parsed.some((value) => typeof value !== "string")) throw new Error()
+    const [effectiveDate, dataType, recordId] = parsed as [string, string, string]
+    return { effectiveDate, dataType, recordId }
+  } catch {
+    throw new InvalidRecordsCursorError("Records cursor is invalid")
+  }
+}
+
+const rowToRecord = ({ payload_json, effective_date: _effectiveDate, ...row }: RecordRow): OuraRecord => ({
+  ...row,
+  payload: JSON.parse(payload_json) as Record<string, unknown>
+})
+
+const exactEffectiveDate = (row: RecordRow): string => effectiveDay(rowToRecord(row))
 
 export const status = async (env: AppEnv): Promise<ObservatoryStatus> => {
   const [summary, datasets, token, sync] = await Promise.all([
     env.DB.prepare(`
-      SELECT COUNT(*) AS records, COUNT(DISTINCT record_date) AS days,
-             MIN(record_date) AS first_date, MAX(record_date) AS last_date,
-             MAX(synced_at) AS last_sync
-      FROM records
+      SELECT record_count AS records, day_count AS days, first_date, last_date, last_sync
+      FROM record_status WHERE singleton = 1
     `).first<{ records: number; days: number; first_date: string | null; last_date: string | null; last_sync: string | null }>(),
     env.DB.prepare(`
-      SELECT data_type, COUNT(*) AS count, MIN(record_date) AS first_date, MAX(record_date) AS last_date
-      FROM records GROUP BY data_type ORDER BY data_type
+      SELECT data_type, record_count AS count, first_date, last_date
+      FROM record_dataset_status ORDER BY data_type
     `).all<DatasetCount>(),
     env.DB.prepare("SELECT scope FROM oauth_tokens WHERE account_id = 'primary'").first<{ scope: string | null }>(),
     env.DB.prepare("SELECT started_at, finished_at, status, details FROM sync_log ORDER BY id DESC LIMIT 1")
@@ -44,35 +81,85 @@ export const status = async (env: AppEnv): Promise<ObservatoryStatus> => {
 
 export const records = async (
   env: AppEnv,
-  options: { start?: string; end?: string; type?: string; offset?: number }
+  options: { start?: string; end?: string; type?: string; cursor?: string }
 ): Promise<RecordsPage> => {
   const clauses: string[] = []
   const bindings: (string | number)[] = []
-  const date = "COALESCE(record_date, json_extract(payload_json, '$.start_day'), json_extract(payload_json, '$.day'))"
-  const timestamp = "COALESCE(start_datetime, json_extract(payload_json, '$.timestamp'), json_extract(payload_json, '$.bedtime_start'))"
   if (options.type) {
     clauses.push("data_type = ?")
     bindings.push(options.type)
   }
   if (options.start) {
-    clauses.push(`(CASE WHEN ${date} IS NOT NULL THEN ${date} >= ? ELSE julianday(${timestamp}) >= julianday(?) END)`)
-    bindings.push(options.start, dayStart(options.start))
+    clauses.push("effective_date >= ?")
+    // Existing timestamps may be UTC or carry a source offset. The one-day
+    // index window is narrowed exactly in code using the account timezone.
+    bindings.push(shiftDay(options.start, -1))
   }
   if (options.end) {
-    clauses.push(`(CASE WHEN ${date} IS NOT NULL THEN ${date} <= ? ELSE julianday(${timestamp}) < julianday(?) END)`)
-    bindings.push(options.end, dayStart(shiftDay(options.end, 1)))
+    clauses.push("effective_date <= ?")
+    bindings.push(shiftDay(options.end, 1))
+  }
+  if (options.cursor) {
+    const cursor = decodeCursor(options.cursor)
+    clauses.push(`(
+      effective_date > ? OR
+      (effective_date = ? AND data_type > ?) OR
+      (effective_date = ? AND data_type = ? AND record_id > ?)
+    )`)
+    bindings.push(cursor.effectiveDate, cursor.effectiveDate, cursor.dataType, cursor.effectiveDate, cursor.dataType, cursor.recordId)
   }
   const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`
   const result = await env.DB.prepare(`
-    SELECT data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at
+    SELECT data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at, effective_date
     FROM records ${where}
-    ORDER BY COALESCE(record_date, start_datetime), data_type, record_id
-    LIMIT 2001 OFFSET ?
-  `).bind(...bindings, options.offset ?? 0).all<RecordRow>()
+    ORDER BY effective_date, data_type, record_id
+    LIMIT 2001
+  `).bind(...bindings).all<RecordRow>()
+  const candidates = result.results.slice(0, 2000)
+  const page = candidates.filter((row) => {
+    const day = exactEffectiveDate(row)
+    return (!options.start || day >= options.start) && (!options.end || day <= options.end)
+  })
   return {
-    records: result.results.slice(0, 2000).map(({ payload_json, ...row }) => ({ ...row, payload: JSON.parse(payload_json) as Record<string, unknown> })),
-    nextOffset: result.results.length > 2000 ? (options.offset ?? 0) + 2000 : null
+    records: page.map(rowToRecord),
+    nextCursor: result.results.length > 2000 ? encodeCursor(candidates[candidates.length - 1]!) : null
   }
+}
+
+const dailyTypes = [
+  "daily_sleep", "sleep", "daily_readiness", "daily_activity", "daily_stress",
+  "daily_spo2", "cardiovascular_age", "vo2_max"
+] as const
+
+export const dailySummaries = async (
+  env: AppEnv,
+  options: { start: string; end: string }
+): Promise<DailySummariesResponse> => {
+  const placeholders = dailyTypes.map(() => "?").join(", ")
+  const result = await env.DB.prepare(`
+    SELECT data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at, effective_date
+    FROM records
+    WHERE effective_date >= ? AND effective_date <= ? AND data_type IN (${placeholders})
+    ORDER BY effective_date, data_type, record_id
+  `).bind(shiftDay(options.start, -1), shiftDay(options.end, 1), ...dailyTypes).all<RecordRow>()
+  const exact = result.results.filter((row) => {
+    const day = exactEffectiveDate(row)
+    return day >= options.start && day <= options.end
+  })
+  return { days: buildDailyPoints(exact.map(rowToRecord)) }
+}
+
+const selectedDayTypes = ["sleep", "daily_activity", "heart_rate", "tag", "session", "workout"] as const
+
+export const selectedDay = async (env: AppEnv, day: string): Promise<SelectedDayResponse> => {
+  const placeholders = selectedDayTypes.map(() => "?").join(", ")
+  const result = await env.DB.prepare(`
+    SELECT data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at, effective_date
+    FROM records
+    WHERE effective_date >= ? AND effective_date <= ? AND data_type IN (${placeholders})
+    ORDER BY effective_date, data_type, record_id
+  `).bind(shiftDay(day, -1), shiftDay(day, 1), ...selectedDayTypes).all<RecordRow>()
+  return { day, records: result.results.map(rowToRecord) }
 }
 
 const recordId = async (dataType: string, item: Record<string, unknown>): Promise<string> => {
@@ -82,6 +169,9 @@ const recordId = async (dataType: string, item: Record<string, unknown>): Promis
   return `${dataType}-${await sha256(JSON.stringify(item))}`
 }
 
+const firstString = (values: readonly unknown[]): string | null =>
+  values.find((value): value is string => typeof value === "string" && value.length > 0) ?? null
+
 export const upsertRecords = async (
   env: AppEnv,
   dataType: string,
@@ -90,25 +180,30 @@ export const upsertRecords = async (
   const syncedAt = new Date().toISOString()
   const statements: D1PreparedStatement[] = []
   for (const item of items) {
+    const recordDate = firstString([item.day, item.start_day, item.date])
+    const startDatetime = firstString([item.start_datetime, item.bedtime_start, item.timestamp, item.start_time])
     statements.push(env.DB.prepare(`
       INSERT INTO records (
-        data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        data_type, record_id, record_date, start_datetime, end_datetime, payload_json, synced_at, effective_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(data_type, record_id) DO UPDATE SET
         record_date = excluded.record_date,
         start_datetime = excluded.start_datetime,
         end_datetime = excluded.end_datetime,
         payload_json = excluded.payload_json,
-        synced_at = excluded.synced_at
+        synced_at = excluded.synced_at,
+        effective_date = excluded.effective_date
       WHERE records.payload_json IS NOT excluded.payload_json
+         OR records.effective_date IS NOT excluded.effective_date
     `).bind(
       dataType,
       await recordId(dataType, item),
-      item.day ?? item.date ?? item.start_day ?? null,
-      item.start_datetime ?? item.bedtime_start ?? item.timestamp ?? item.start_time ?? null,
+      recordDate,
+      startDatetime,
       item.end_datetime ?? item.bedtime_end ?? item.end_time ?? null,
       JSON.stringify(item),
-      syncedAt
+      syncedAt,
+      effectiveDay({ payload: item, record_date: recordDate, start_datetime: startDatetime })
     ))
   }
   for (let offset = 0; offset < statements.length; offset += 75) {

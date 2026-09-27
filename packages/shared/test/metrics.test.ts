@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { baselineFor, buildDailyPoints, dayStart, indexRecordRange, indexRecords, localDay, mainSleep, pearson, recordLocalDay, recordsOfTypes, type OuraRecord } from "../src/index.js"
+import { baselineFor, buildDailyPoints, dayStart, effectiveDay, indexRecordRange, indexRecords, localDay, mainSleep, pearson, recordLocalDay, recordsOfTypes, type OuraRecord } from "../src/index.js"
 
 const record = (data_type: string, day: string, payload: Record<string, unknown>): OuraRecord => ({
   data_type,
@@ -21,6 +21,14 @@ describe("daily telemetry", () => {
     expect(dayStart("2026-03-09")).toBe("2026-03-09T04:00:00.000Z")
     expect(dayStart("2026-11-01")).toBe("2026-11-01T04:00:00.000Z")
     expect(dayStart("2026-11-02")).toBe("2026-11-02T05:00:00.000Z")
+  })
+
+  it("uses one canonical day precedence and converts fallback instants to Eastern", () => {
+    const conflicting = record("daily_activity", "2026-09-23", { day: "2026-09-20", start_day: "2026-09-21", date: "2026-09-22", steps: 10 })
+    expect(effectiveDay(conflicting)).toBe("2026-09-20")
+    expect(buildDailyPoints([conflicting])).toEqual([expect.objectContaining({ day: "2026-09-20", steps: 10 })])
+    expect(effectiveDay({ payload: {}, record_date: null, start_datetime: "2026-09-20T03:59:59Z" })).toBe("2026-09-19")
+    expect(effectiveDay({ payload: { timestamp: "2026-09-20T00:30:00+02:00" }, record_date: null, start_datetime: null })).toBe("2026-09-19")
   })
 
   it("excludes the selected day, future days and old history from a sparse baseline", () => {

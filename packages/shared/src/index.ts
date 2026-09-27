@@ -39,6 +39,27 @@ const localDateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
 
 export const localDay = (date: Date): string => localDayFormatter.format(date)
 
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined
+
+// Canonical record-day contract: Oura's explicit payload day wins, followed
+// by start_day, date, the stored record_date, then an instant in Eastern time.
+export const effectiveDay = (
+  record: Pick<OuraRecord, "record_date" | "start_datetime" | "payload">
+): string => {
+  for (const value of [record.payload.day, record.payload.start_day, record.payload.date, record.record_date]) {
+    const day = nonEmptyString(value)
+    if (day) return day
+  }
+  for (const value of [record.start_datetime, record.payload.timestamp, record.payload.bedtime_start, record.payload.start_time]) {
+    const timestamp = nonEmptyString(value)
+    if (!timestamp) continue
+    const instant = new Date(timestamp)
+    if (!Number.isNaN(instant.getTime())) return localDay(instant)
+  }
+  return ""
+}
+
 export const shiftDay = (day: string, days: number): string => {
   const date = new Date(`${day}T12:00:00Z`)
   date.setUTCDate(date.getUTCDate() + days)
@@ -58,14 +79,18 @@ export const dayStart = (day: string): string => {
   return new Date(instant).toISOString()
 }
 
-export type RecordsPage = { records: OuraRecord[]; nextOffset: number | null }
+export type RecordsPage = { records: OuraRecord[]; nextCursor: string | null }
 
-export const recordLocalDay = (record: OuraRecord): string => {
-  const recordedDay = String(record.payload.day ?? record.payload.start_day ?? record.record_date ?? "")
-  if (recordedDay) return recordedDay
-  const startedAt = Date.parse(String(record.start_datetime ?? record.payload.timestamp ?? record.payload.bedtime_start ?? record.payload.start_time ?? ""))
-  return Number.isFinite(startedAt) ? localDay(new Date(startedAt)) : ""
+export type DailySummariesResponse = {
+  days: DailyPoint[]
 }
+
+export type SelectedDayResponse = {
+  day: string
+  records: OuraRecord[]
+}
+
+export const recordLocalDay = effectiveDay
 
 export type RecordIndex = {
   records: OuraRecord[]
@@ -140,6 +165,8 @@ export const baselineFor = (points: readonly DailyPoint[], day: string, key: key
 
 export type DailyPoint = {
   day: string
+  bedtimeStart?: string
+  bedtimeEnd?: string
   sleepScore?: number
   readinessScore?: number
   activityScore?: number
@@ -194,11 +221,11 @@ const assignContributors = (
 
 export const buildDailyPoints = (records: readonly OuraRecord[]): DailyPoint[] => {
   const days = new Map<string, DailyPoint>()
-  const sleepCandidates = new Map<string, Record<string, unknown>>()
+  const sleepCandidates = new Map<string, OuraRecord>()
 
   for (const record of records) {
     const payload = record.payload
-    const day = typeof payload.day === "string" ? payload.day : record.record_date
+    const day = effectiveDay(record)
     if (!day) continue
     const point = days.get(day) ?? { day }
 
@@ -232,14 +259,19 @@ export const buildDailyPoints = (records: readonly OuraRecord[]): DailyPoint[] =
     } else if (record.data_type === "sleep") {
       const existing = sleepCandidates.get(day)
       const duration = numberAt(payload.total_sleep_duration) ?? 0
-      const existingDuration = numberAt(existing?.total_sleep_duration) ?? -1
-      if (!existing || duration > existingDuration) sleepCandidates.set(day, payload)
+      const existingDuration = numberAt(existing?.payload.total_sleep_duration) ?? -1
+      if (!existing || duration > existingDuration) sleepCandidates.set(day, record)
     }
     days.set(day, point)
   }
 
-  for (const [day, sleep] of sleepCandidates) {
+  for (const [day, record] of sleepCandidates) {
     const point = days.get(day) ?? { day }
+    const sleep = record.payload
+    const bedtimeStart = record.start_datetime ?? (typeof sleep.bedtime_start === "string" ? sleep.bedtime_start : undefined)
+    const bedtimeEnd = record.end_datetime ?? (typeof sleep.bedtime_end === "string" ? sleep.bedtime_end : undefined)
+    if (bedtimeStart) point.bedtimeStart = bedtimeStart
+    if (bedtimeEnd) point.bedtimeEnd = bedtimeEnd
     point.averageHrv = numberAt(sleep.average_hrv)
     point.lowestHeartRate = numberAt(sleep.lowest_heart_rate)
     point.averageHeartRate = numberAt(sleep.average_heart_rate)

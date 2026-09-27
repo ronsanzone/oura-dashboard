@@ -26,8 +26,7 @@ export function SleepView({ points, history, index, day }: { points: DailyPoint[
       })}
     </Panel>
     <Panel title="Bed & wake rhythm" meta="EASTERN TIME" wide><div className="rhythm">{points.slice(-14).map((point) => {
-      const sleep = mainSleep(index.byDayAndType.get(point.day)?.get("sleep") ?? [])
-      return <div key={point.day}><span>{point.day.slice(5)}</span><b>{sleep ? clock(startTime(sleep)) : "—"}</b><span>→</span><b>{sleep?.end_datetime || sleep?.payload.bedtime_end ? clock(String(sleep.end_datetime ?? sleep.payload.bedtime_end)) : "—"}</b></div>
+      return <div key={point.day}><span>{point.day.slice(5)}</span><b>{point.bedtimeStart ? clock(point.bedtimeStart) : "—"}</b><span>→</span><b>{point.bedtimeEnd ? clock(point.bedtimeEnd) : "—"}</b></div>
     })}</div><p className="caption">Last 14 days · main sleep only. Times preserve the source instant; no invented bedtime recommendations.</p></Panel>
     <div className="wide"><Timeline index={index} day={day} /></div>
   </div>

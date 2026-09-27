@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build --configLoader runner",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
