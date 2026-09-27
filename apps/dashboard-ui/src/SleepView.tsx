@@ -1,10 +1,10 @@
 import { useState } from "react"
-import { mainSleep, type DailyPoint, type OuraRecord } from "@oura/shared"
+import { mainSleep, type DailyPoint, type RecordIndex } from "@oura/shared"
 import { Chart } from "./Chart"
-import { base, clock, Empty, fmt, muted, num, palette, Panel, recordDay, samples, startTime, Timeline, Trend } from "./Dashboard"
+import { base, clock, Empty, fmt, muted, num, palette, Panel, samples, startTime, Timeline, Trend } from "./Dashboard"
 
-export function SleepView({ points, history, records, day }: { points: DailyPoint[]; history: DailyPoint[]; records: OuraRecord[]; day: string }) {
-  const sleeps = records.filter((record) => record.data_type === "sleep" && recordDay(record) === day)
+export function SleepView({ points, history, index, day }: { points: DailyPoint[]; history: DailyPoint[]; index: RecordIndex; day: string }) {
+  const sleeps = index.byDayAndType.get(day)?.get("sleep") ?? []
   const main = mainSleep(sleeps)
   const [selected, setSelected] = useState("")
   const sleep = sleeps.find((record) => record.record_id === selected) ?? main
@@ -26,9 +26,9 @@ export function SleepView({ points, history, records, day }: { points: DailyPoin
       })}
     </Panel>
     <Panel title="Bed & wake rhythm" meta="EASTERN TIME" wide><div className="rhythm">{points.slice(-14).map((point) => {
-      const sleep = mainSleep(records.filter((record) => recordDay(record) === point.day))
+      const sleep = mainSleep(index.byDayAndType.get(point.day)?.get("sleep") ?? [])
       return <div key={point.day}><span>{point.day.slice(5)}</span><b>{sleep ? clock(startTime(sleep)) : "—"}</b><span>→</span><b>{sleep?.end_datetime || sleep?.payload.bedtime_end ? clock(String(sleep.end_datetime ?? sleep.payload.bedtime_end)) : "—"}</b></div>
     })}</div><p className="caption">Last 14 days · main sleep only. Times preserve the source instant; no invented bedtime recommendations.</p></Panel>
-    <div className="wide"><Timeline records={records} day={day} /></div>
+    <div className="wide"><Timeline index={index} day={day} /></div>
   </div>
 }

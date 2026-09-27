@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
-import { baselineFor, buildDailyPoints, localDay, shiftDay, type DailyPoint, type ObservatoryStatus, type OuraRecord, type RecordsPage } from "@oura/shared"
-import { Empty, fmt, palette, recordDay, startTime, Timeline, Trend } from "./Dashboard"
+import { baselineFor, buildDailyPoints, indexRecordRange, indexRecords, localDay, shiftDay, type DailyPoint, type ObservatoryStatus, type OuraRecord, type RecordsPage } from "@oura/shared"
+import { Empty, fmt, palette, Timeline, Trend } from "./Dashboard"
 import { JevDebug } from "./JevDebug"
 
 const SleepView = lazy(() => import("./SleepView").then(({ SleepView }) => ({ default: SleepView })))
@@ -73,7 +73,8 @@ export function App() {
   }, [day, historyStart, refresh])
   const allPoints = useMemo(() => buildDailyPoints(records), [records])
   const points = useMemo(() => Array.from({ length: windowDays }, (_, index) => allPoints.find((point) => point.day === shiftDay(start, index)) ?? { day: shiftDay(start, index) }), [allPoints, start, windowDays])
-  const visibleRecords = records.filter((record) => { const date = recordDay(record) || (Number.isFinite(startTime(record)) ? localDay(new Date(startTime(record))) : ""); return date >= start && date <= day })
+  const recordIndex = useMemo(() => indexRecords(records), [records])
+  const visibleRecordIndex = useMemo(() => indexRecordRange(recordIndex, start, day), [recordIndex, start, day])
   const sync = async () => {
     if (debriefDirty && !confirm("Sync will refresh this view. Discard your unsaved context draft or pending result?")) return
     setSyncing(true); setError(null)
@@ -96,11 +97,11 @@ export function App() {
       <Suspense fallback={<ViewLoading tab={tab} />}>
         {tab === "Debrief" ? <Debrief records={records} onDirty={setDebriefDirty} /> : tab === "Experiments" ? <Experiments /> : loading ? <div className="loading" role="status">Gathering your measurements…</div> : error && !records.length ? <Empty>Data unavailable. Retry above; incomplete results are not displayed.</Empty> : <>
           {tab !== "Today" && <header className="page-title"><span className="eyebrow">{start} — {day}</span><h1>{{ Sleep: "Make room for rest.", Cardio: "Listen over the long run.", Activity: "Movement, in perspective.", Explore: "Curiosity, with context.", Data: "Know what you’re seeing." }[tab]}</h1></header>}
-          {tab === "Today" ? <><Brief points={allPoints} day={day} /><Timeline key={day} records={records} day={day} /><div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="A longer view of sleep" unit="h" /><Trend points={points} history={allPoints} metric="averageHrv" title="Your overnight HRV" unit="ms" color={palette[1]} /></div></>
-            : tab === "Sleep" ? <SleepView key={day} points={points} history={allPoints} records={records} day={day} />
-            : tab === "Cardio" ? <CardioView points={points} history={allPoints} records={visibleRecords} />
-            : tab === "Activity" ? <ActivityView points={points} history={allPoints} records={visibleRecords} />
-            : tab === "Explore" ? <ExploreView points={points} history={allPoints} start={start} end={day} records={visibleRecords} onDirty={setDebriefDirty} /> : status && <DataView status={status} records={visibleRecords} />}
+          {tab === "Today" ? <><Brief points={allPoints} day={day} /><Timeline key={day} index={recordIndex} day={day} /><div className="dashboard-grid"><Trend points={points} history={allPoints} metric="totalSleepHours" title="A longer view of sleep" unit="h" /><Trend points={points} history={allPoints} metric="averageHrv" title="Your overnight HRV" unit="ms" color={palette[1]} /></div></>
+            : tab === "Sleep" ? <SleepView key={day} points={points} history={allPoints} index={recordIndex} day={day} />
+            : tab === "Cardio" ? <CardioView points={points} history={allPoints} index={visibleRecordIndex} />
+            : tab === "Activity" ? <ActivityView points={points} history={allPoints} index={visibleRecordIndex} />
+            : tab === "Explore" ? <ExploreView points={points} history={allPoints} start={start} end={day} index={visibleRecordIndex} onDirty={setDebriefDirty} /> : status && <DataView status={status} index={visibleRecordIndex} />}
         </>}
       </Suspense>
       <JevDebug />

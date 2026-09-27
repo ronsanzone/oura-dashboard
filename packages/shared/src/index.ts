@@ -29,9 +29,15 @@ export type ObservatoryStatus = {
 }
 
 export const timeZone = "America/New_York"
-export const localDay = (date: Date): string => new Intl.DateTimeFormat("en-CA", {
+const localDayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone, year: "numeric", month: "2-digit", day: "2-digit"
-}).format(date)
+})
+const localDateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+})
+
+export const localDay = (date: Date): string => localDayFormatter.format(date)
 
 export const shiftDay = (day: string, days: number): string => {
   const date = new Date(`${day}T12:00:00Z`)
@@ -44,7 +50,7 @@ export const dayStart = (day: string): string => {
   const midnight = Date.parse(`${day}T00:00:00Z`)
   let instant = midnight
   for (let i = 0; i < 3; i++) {
-    const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(instant))
+    const parts = localDateTimeFormatter.formatToParts(new Date(instant))
     const get = (key: string) => parts.find((part) => part.type === key)?.value
     const wall = Date.parse(`${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}Z`)
     instant += midnight - wall
@@ -53,6 +59,74 @@ export const dayStart = (day: string): string => {
 }
 
 export type RecordsPage = { records: OuraRecord[]; nextOffset: number | null }
+
+export const recordLocalDay = (record: OuraRecord): string => {
+  const recordedDay = String(record.payload.day ?? record.payload.start_day ?? record.record_date ?? "")
+  if (recordedDay) return recordedDay
+  const startedAt = Date.parse(String(record.start_datetime ?? record.payload.timestamp ?? record.payload.bedtime_start ?? record.payload.start_time ?? ""))
+  return Number.isFinite(startedAt) ? localDay(new Date(startedAt)) : ""
+}
+
+export type RecordIndex = {
+  records: OuraRecord[]
+  dayByRecord: ReadonlyMap<OuraRecord, string>
+  typeByRecord: ReadonlyMap<OuraRecord, string>
+  orderByRecord: ReadonlyMap<OuraRecord, number>
+  byDay: ReadonlyMap<string, OuraRecord[]>
+  byType: ReadonlyMap<string, OuraRecord[]>
+  byDayAndType: ReadonlyMap<string, ReadonlyMap<string, OuraRecord[]>>
+}
+
+const pushRecord = (map: Map<string, OuraRecord[]>, key: string, record: OuraRecord): void => {
+  const values = map.get(key)
+  if (values) values.push(record)
+  else map.set(key, [record])
+}
+
+const createRecordIndex = (
+  records: OuraRecord[],
+  knownDays?: ReadonlyMap<OuraRecord, string>,
+  knownTypes?: ReadonlyMap<OuraRecord, string>
+): RecordIndex => {
+  const dayByRecord = new Map<OuraRecord, string>()
+  const typeByRecord = new Map<OuraRecord, string>()
+  const orderByRecord = new Map<OuraRecord, number>()
+  const byDay = new Map<string, OuraRecord[]>()
+  const byType = new Map<string, OuraRecord[]>()
+  const byDayAndType = new Map<string, Map<string, OuraRecord[]>>()
+
+  records.forEach((record, order) => {
+    const day = knownDays?.get(record) ?? recordLocalDay(record)
+    const type = knownTypes?.get(record) ?? record.data_type
+    dayByRecord.set(record, day)
+    typeByRecord.set(record, type)
+    orderByRecord.set(record, order)
+    pushRecord(byType, type, record)
+    if (!day) return
+    pushRecord(byDay, day, record)
+    let types = byDayAndType.get(day)
+    if (!types) {
+      types = new Map()
+      byDayAndType.set(day, types)
+    }
+    pushRecord(types, type, record)
+  })
+
+  return { records, dayByRecord, typeByRecord, orderByRecord, byDay, byType, byDayAndType }
+}
+
+export const indexRecords = (records: readonly OuraRecord[]): RecordIndex =>
+  createRecordIndex([...records])
+
+export const indexRecordRange = (index: RecordIndex, start: string, end: string): RecordIndex =>
+  createRecordIndex(index.records.filter((record) => {
+    const day = index.dayByRecord.get(record) ?? ""
+    return day >= start && day <= end
+  }), index.dayByRecord, index.typeByRecord)
+
+export const recordsOfTypes = (index: RecordIndex, types: readonly string[]): OuraRecord[] =>
+  types.flatMap((type) => index.byType.get(type) ?? [])
+    .sort((left, right) => (index.orderByRecord.get(left) ?? 0) - (index.orderByRecord.get(right) ?? 0))
 
 export const mainSleep = (records: readonly OuraRecord[]): OuraRecord | undefined =>
   records.filter((record) => record.data_type === "sleep").reduce<OuraRecord | undefined>((best, record) =>

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { baselineFor, dayStart, localDay, shiftDay, timeZone, type DailyPoint, type OuraRecord } from "@oura/shared"
+import { baselineFor, dayStart, recordsOfTypes, shiftDay, timeZone, type DailyPoint, type OuraRecord, type RecordIndex } from "@oura/shared"
 import { Chart } from "./Chart"
 
 // Waffle Cat: ronsanzone/dotfiles/theme-picker/themes/omarchy-waffle-cat.json
@@ -8,7 +8,6 @@ export const palette = ["#df9850", "#9eb8b2", "#c98c97", "#9fad68", "#e4c56d"]
 export const num = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined
 export const fmt = (value: unknown, digits = 1) => num(value)?.toLocaleString(undefined, { maximumFractionDigits: digits }) ?? "—"
 export const clock = (value: number | string) => new Date(value).toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" })
-export const recordDay = (record: OuraRecord) => String(record.payload.day ?? record.payload.start_day ?? record.record_date ?? "")
 export const startTime = (record: OuraRecord) => Date.parse(String(record.start_datetime ?? record.payload.timestamp ?? record.payload.bedtime_start ?? record.payload.start_time ?? ""))
 export const eventLabel = (record: OuraRecord) => String(record.payload.comment || record.payload.custom_name || record.payload.tag_type_code || record.payload.activity || record.payload.type || record.data_type).replaceAll("_", " ")
 export const base = {
@@ -50,7 +49,7 @@ export function samples(value: unknown): Sample[] {
   return data.items.map((item, index) => [start + index * interval * 1000, num(item) ?? null])
 }
 
-export function Timeline({ records, day }: { records: OuraRecord[]; day: string }) {
+export function Timeline({ index, day }: { index: RecordIndex; day: string }) {
   const [mode, setMode] = useState("night")
   const [position, setPosition] = useState(50)
   const midnight = Date.parse(dayStart(day))
@@ -59,17 +58,17 @@ export function Timeline({ records, day }: { records: OuraRecord[]; day: string 
   const max = mode === "night" ? nextMidnight - 6 * 3600000 : nextMidnight
   const cursor = min + (max - min) * position / 100
   const within = (time: number) => time >= min && time < max
-  const sleeps = records.filter((record) => record.data_type === "sleep")
+  const sleeps = index.byType.get("sleep") ?? []
   const phases: Sample[] = sleeps.flatMap((record) => {
     const phases = record.payload.sleep_phase_30_sec
     if (typeof phases !== "string") return []
     const start = startTime(record)
     return [...phases].map((value, index): Sample => [start + index * 30000, /^[1-4]$/.test(value) ? Number(value) : null]).concat([[start + phases.length * 30000, null]])
   }).filter(([time]) => within(time)).sort((a, b) => a[0] - b[0])
-  const hr: Sample[] = records.filter((record) => record.data_type === "heart_rate" && within(startTime(record)))
+  const hr: Sample[] = (index.byType.get("heart_rate") ?? []).filter((record) => within(startTime(record)))
     .map((record): Sample => [startTime(record), num(record.payload.bpm) ?? null]).sort((a, b) => a[0] - b[0])
-  const met = records.filter((record) => record.data_type === "daily_activity").flatMap((record) => samples(record.payload.met)).filter(([time]) => within(time)).sort((a, b) => a[0] - b[0])
-  const events = records.filter((record) => ["tag", "session", "workout"].includes(record.data_type) && (within(startTime(record)) || (!Number.isFinite(startTime(record)) && recordDay(record) === day)))
+  const met = (index.byType.get("daily_activity") ?? []).flatMap((record) => samples(record.payload.met)).filter(([time]) => within(time)).sort((a, b) => a[0] - b[0])
+  const events = recordsOfTypes(index, ["tag", "session", "workout"]).filter((record) => within(startTime(record)) || (!Number.isFinite(startTime(record)) && index.dayByRecord.get(record) === day))
   const sleepEvents = sleeps.flatMap((record) => [{ time: startTime(record), label: "Bedtime" }, { time: Date.parse(String(record.end_datetime ?? record.payload.bedtime_end ?? "")), label: "Wake time" }]).filter((event) => within(event.time))
   const timedEvents = [...sleepEvents, ...events.filter((record) => Number.isFinite(startTime(record))).map((record) => ({ time: startTime(record), label: eventLabel(record) }))].sort((a, b) => a.time - b.time)
   const lanes = [phases, hr, met, timedEvents.map((event): Sample => [event.time, 1])]
@@ -94,7 +93,7 @@ export function Timeline({ records, day }: { records: OuraRecord[]; day: string 
   </section>
 }
 
-export function Events({ records }: { records: OuraRecord[] }) {
-  const events = records.filter((record) => ["workout", "session", "tag"].includes(record.data_type))
-  return <Panel title="The context you logged" meta={`${events.length} EVENTS`} wide>{events.length ? <div className="table-wrap"><table><thead><tr><th>Day</th><th>Type</th><th>Context</th><th>Duration</th></tr></thead><tbody>{events.map((record) => <tr key={`${record.data_type}-${record.record_id}`}><td>{recordDay(record) || (Number.isFinite(startTime(record)) ? localDay(new Date(startTime(record))) : "Unknown")}</td><td>{record.data_type}</td><td>{eventLabel(record)}</td><td>{record.end_datetime && Number.isFinite(startTime(record)) ? `${fmt((Date.parse(record.end_datetime) - startTime(record)) / 60000)} min` : "Not recorded"}</td></tr>)}</tbody></table></div> : <Empty>No workouts, sessions or tags in this window. This does not mean none happened.</Empty>}</Panel>
+export function Events({ index }: { index: RecordIndex }) {
+  const events = recordsOfTypes(index, ["workout", "session", "tag"])
+  return <Panel title="The context you logged" meta={`${events.length} EVENTS`} wide>{events.length ? <div className="table-wrap"><table><thead><tr><th>Day</th><th>Type</th><th>Context</th><th>Duration</th></tr></thead><tbody>{events.map((record) => <tr key={`${record.data_type}-${record.record_id}`}><td>{index.dayByRecord.get(record) || "Unknown"}</td><td>{record.data_type}</td><td>{eventLabel(record)}</td><td>{record.end_datetime && Number.isFinite(startTime(record)) ? `${fmt((Date.parse(record.end_datetime) - startTime(record)) / 60000)} min` : "Not recorded"}</td></tr>)}</tbody></table></div> : <Empty>No workouts, sessions or tags in this window. This does not mean none happened.</Empty>}</Panel>
 }

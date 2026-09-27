@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { baselineFor, buildDailyPoints, dayStart, localDay, mainSleep, pearson, type OuraRecord } from "../src/index.js"
+import { describe, expect, it, vi } from "vitest"
+import { baselineFor, buildDailyPoints, dayStart, indexRecordRange, indexRecords, localDay, mainSleep, pearson, recordLocalDay, recordsOfTypes, type OuraRecord } from "../src/index.js"
 
 const record = (data_type: string, day: string, payload: Record<string, unknown>): OuraRecord => ({
   data_type,
@@ -14,6 +14,9 @@ const record = (data_type: string, day: string, payload: Record<string, unknown>
 describe("daily telemetry", () => {
   it("uses Eastern calendar dates and handles 23/25-hour DST days", () => {
     expect(localDay(new Date("2026-09-26T02:00:00Z"))).toBe("2026-09-25")
+    expect(localDay(new Date("2026-03-08T04:59:59Z"))).toBe("2026-03-07")
+    expect(localDay(new Date("2026-03-09T03:59:59Z"))).toBe("2026-03-08")
+    expect(localDay(new Date("2026-11-02T04:59:59Z"))).toBe("2026-11-01")
     expect(dayStart("2026-03-08")).toBe("2026-03-08T05:00:00.000Z")
     expect(dayStart("2026-03-09")).toBe("2026-03-09T04:00:00.000Z")
     expect(dayStart("2026-11-01")).toBe("2026-11-01T04:00:00.000Z")
@@ -54,5 +57,62 @@ describe("daily telemetry", () => {
   it("computes Pearson correlation only with sufficient overlap", () => {
     expect(pearson([1, 2, 3], [2, 4, 6])).toBeCloseTo(1)
     expect(pearson([1, undefined], [2, 4])).toBeUndefined()
+  })
+})
+
+describe("record index", () => {
+  const timedRecord = (id: string, data_type: string, start_datetime: string | null, payload: Record<string, unknown> = {}): OuraRecord => ({
+    data_type,
+    record_id: id,
+    record_date: null,
+    start_datetime,
+    end_datetime: null,
+    payload,
+    synced_at: "2026-07-18T00:00:00Z"
+  })
+
+  it("resolves explicit dates before timestamps and uses Eastern time at DST boundaries", () => {
+    expect(recordLocalDay(timedRecord("explicit", "tag", "2026-03-08T04:30:00Z", { day: "2026-03-09", start_day: "2026-03-10" }))).toBe("2026-03-09")
+    expect(recordLocalDay(timedRecord("start-day", "tag", "2026-03-08T04:30:00Z", { start_day: "2026-03-08" }))).toBe("2026-03-08")
+    expect(recordLocalDay({ ...timedRecord("record-date", "sleep", "2026-03-08T04:30:00Z"), record_date: "2026-03-07" })).toBe("2026-03-07")
+    expect(recordLocalDay(timedRecord("spring-before-midnight", "heart_rate", "2026-03-08T04:30:00Z"))).toBe("2026-03-07")
+    expect(recordLocalDay(timedRecord("spring-after-midnight", "heart_rate", "2026-03-08T05:30:00Z"))).toBe("2026-03-08")
+    expect(recordLocalDay(timedRecord("fall-before-midnight", "heart_rate", "2026-11-02T04:30:00Z"))).toBe("2026-11-01")
+    expect(recordLocalDay(timedRecord("fall-after-midnight", "heart_rate", "2026-11-02T05:30:00Z"))).toBe("2026-11-02")
+  })
+
+  it("indexes day and type once, preserves source order, and reuses the derivation for ranges", () => {
+    const before = timedRecord("before", "heart_rate", "2026-03-08T04:30:00Z")
+    const tag = timedRecord("tag", "tag", null, { start_day: "2026-03-08" })
+    const after = timedRecord("after", "heart_rate", "2026-03-08T05:30:00Z")
+    const unknown = timedRecord("unknown", "workout", null)
+    const index = indexRecords([before, tag, after, unknown])
+
+    expect(index.byDay.get("2026-03-07")).toEqual([before])
+    expect(index.byDayAndType.get("2026-03-08")?.get("heart_rate")).toEqual([after])
+    expect(index.byType.get("heart_rate")).toEqual([before, after])
+    expect(recordsOfTypes(index, ["tag", "heart_rate"])).toEqual([before, tag, after])
+
+    before.start_datetime = "2026-12-31T12:00:00Z"
+    before.data_type = "changed"
+    const range = indexRecordRange(index, "2026-03-07", "2026-03-08")
+    expect(range.records).toEqual([before, tag, after])
+    expect(range.dayByRecord.get(before)).toBe("2026-03-07")
+    expect(range.byType.get("heart_rate")).toEqual([before, after])
+    expect(range.byType.has("changed")).toBe(false)
+  })
+
+  it("reuses initialized Intl formatters while deriving and indexing records", () => {
+    const constructor = vi.spyOn(Intl, "DateTimeFormat")
+    try {
+      const records = Array.from({ length: 20 }, (_, index) =>
+        timedRecord(String(index), "heart_rate", `2026-03-08T${String(index).padStart(2, "0")}:30:00Z`))
+      const index = indexRecords(records)
+      indexRecordRange(index, "2026-03-07", "2026-03-08")
+      dayStart("2026-03-08")
+      expect(constructor).not.toHaveBeenCalled()
+    } finally {
+      constructor.mockRestore()
+    }
   })
 })
