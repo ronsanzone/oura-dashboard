@@ -86,124 +86,15 @@ INSERT INTO record_dataset_status (data_type, record_count, first_date, last_dat
 SELECT data_type, COUNT(*), MIN(NULLIF(effective_date, '')), MAX(NULLIF(effective_date, ''))
 FROM records GROUP BY data_type;
 
-CREATE TRIGGER records_metadata_after_insert
-AFTER INSERT ON records
-BEGIN
-  INSERT INTO record_day_counts (effective_date, record_count)
-  SELECT NEW.effective_date, 1 WHERE NEW.effective_date <> ''
-  ON CONFLICT(effective_date) DO UPDATE SET record_count = record_count + 1;
+CREATE TRIGGER records_metadata_after_insert AFTER INSERT ON records BEGIN INSERT INTO record_day_counts (effective_date, record_count) SELECT NEW.effective_date, 1 WHERE NEW.effective_date <> '' ON CONFLICT(effective_date) DO UPDATE SET record_count = record_count + 1; UPDATE record_status SET record_count = record_count + 1, day_count = day_count + iif(NEW.effective_date <> '' AND (SELECT record_count FROM record_day_counts WHERE effective_date = NEW.effective_date) = 1, 1, 0), first_date = (SELECT MIN(effective_date) FROM record_day_counts), last_date = (SELECT MAX(effective_date) FROM record_day_counts), last_sync = iif(last_sync IS NULL OR NEW.synced_at > last_sync, NEW.synced_at, last_sync) WHERE singleton = 1; INSERT INTO record_dataset_status (data_type, record_count, first_date, last_date) SELECT NEW.data_type, 1, NULLIF(effective_date, ''), NULLIF(effective_date, '') FROM records WHERE data_type = NEW.data_type AND record_id = NEW.record_id ON CONFLICT(data_type) DO UPDATE SET record_count = record_count + 1, first_date = coalesce(min(first_date, excluded.first_date), first_date, excluded.first_date), last_date = coalesce(max(last_date, excluded.last_date), last_date, excluded.last_date); END;
 
-  UPDATE record_status SET
-    record_count = record_count + 1,
-    day_count = day_count + CASE
-      WHEN NEW.effective_date <> ''
-       AND (SELECT record_count FROM record_day_counts WHERE effective_date = NEW.effective_date) = 1
-      THEN 1 ELSE 0 END,
-    first_date = (SELECT MIN(effective_date) FROM record_day_counts),
-    last_date = (SELECT MAX(effective_date) FROM record_day_counts),
-    last_sync = CASE WHEN last_sync IS NULL OR NEW.synced_at > last_sync THEN NEW.synced_at ELSE last_sync END
-  WHERE singleton = 1;
+CREATE TRIGGER records_metadata_after_update AFTER UPDATE OF effective_date, synced_at ON records WHEN OLD.effective_date IS NOT NEW.effective_date OR OLD.synced_at IS NOT NEW.synced_at BEGIN UPDATE record_day_counts SET record_count = record_count - 1 WHERE OLD.effective_date IS NOT NEW.effective_date AND effective_date = OLD.effective_date AND OLD.effective_date <> ''; DELETE FROM record_day_counts WHERE record_count = 0; INSERT INTO record_day_counts (effective_date, record_count) SELECT NEW.effective_date, 1 WHERE OLD.effective_date IS NOT NEW.effective_date AND NEW.effective_date <> '' ON CONFLICT(effective_date) DO UPDATE SET record_count = record_count + 1; UPDATE record_status SET day_count = day_count - iif(OLD.effective_date IS NOT NEW.effective_date AND OLD.effective_date <> '' AND NOT EXISTS (SELECT 1 FROM record_day_counts WHERE effective_date = OLD.effective_date), 1, 0) + iif(OLD.effective_date IS NOT NEW.effective_date AND NEW.effective_date <> '' AND (SELECT record_count FROM record_day_counts WHERE effective_date = NEW.effective_date) = 1, 1, 0), first_date = (SELECT MIN(effective_date) FROM record_day_counts), last_date = (SELECT MAX(effective_date) FROM record_day_counts), last_sync = iif(last_sync IS NULL OR NEW.synced_at >= last_sync, NEW.synced_at, iif(OLD.synced_at = last_sync AND OLD.synced_at IS NOT NEW.synced_at, (SELECT MAX(synced_at) FROM records), last_sync)) WHERE singleton = 1; UPDATE record_dataset_status SET first_date = (SELECT MIN(effective_date) FROM records WHERE data_type = NEW.data_type AND effective_date <> ''), last_date = (SELECT MAX(effective_date) FROM records WHERE data_type = NEW.data_type AND effective_date <> '') WHERE data_type = NEW.data_type AND OLD.effective_date IS NOT NEW.effective_date; END;
 
-  INSERT INTO record_dataset_status (data_type, record_count, first_date, last_date)
-  SELECT NEW.data_type, 1, NULLIF(effective_date, ''), NULLIF(effective_date, '')
-  FROM records WHERE data_type = NEW.data_type AND record_id = NEW.record_id
-  ON CONFLICT(data_type) DO UPDATE SET
-    record_count = record_count + 1,
-    first_date = CASE
-      WHEN excluded.first_date IS NULL THEN first_date
-      WHEN first_date IS NULL OR excluded.first_date < first_date THEN excluded.first_date
-      ELSE first_date END,
-    last_date = CASE
-      WHEN excluded.last_date IS NULL THEN last_date
-      WHEN last_date IS NULL OR excluded.last_date > last_date THEN excluded.last_date
-      ELSE last_date END;
-END;
-
-CREATE TRIGGER records_metadata_after_update
-AFTER UPDATE OF effective_date, synced_at ON records
-WHEN OLD.effective_date IS NOT NEW.effective_date OR OLD.synced_at IS NOT NEW.synced_at
-BEGIN
-  UPDATE record_day_counts SET record_count = record_count - 1
-  WHERE OLD.effective_date IS NOT NEW.effective_date
-    AND effective_date = OLD.effective_date AND OLD.effective_date <> '';
-  DELETE FROM record_day_counts WHERE record_count = 0;
-  INSERT INTO record_day_counts (effective_date, record_count)
-  SELECT NEW.effective_date, 1 WHERE OLD.effective_date IS NOT NEW.effective_date AND NEW.effective_date <> ''
-  ON CONFLICT(effective_date) DO UPDATE SET record_count = record_count + 1;
-
-  UPDATE record_status SET
-    day_count = day_count
-      - CASE WHEN OLD.effective_date IS NOT NEW.effective_date AND OLD.effective_date <> ''
-              AND NOT EXISTS (SELECT 1 FROM record_day_counts WHERE effective_date = OLD.effective_date)
-             THEN 1 ELSE 0 END
-      + CASE WHEN OLD.effective_date IS NOT NEW.effective_date AND NEW.effective_date <> ''
-              AND (SELECT record_count FROM record_day_counts WHERE effective_date = NEW.effective_date) = 1
-             THEN 1 ELSE 0 END,
-    first_date = (SELECT MIN(effective_date) FROM record_day_counts),
-    last_date = (SELECT MAX(effective_date) FROM record_day_counts),
-    last_sync = CASE
-      WHEN last_sync IS NULL OR NEW.synced_at >= last_sync THEN NEW.synced_at
-      WHEN OLD.synced_at = last_sync AND OLD.synced_at IS NOT NEW.synced_at THEN (SELECT MAX(synced_at) FROM records)
-      ELSE last_sync END
-  WHERE singleton = 1;
-
-  UPDATE record_dataset_status SET
-    first_date = (SELECT MIN(effective_date) FROM records WHERE data_type = NEW.data_type AND effective_date <> ''),
-    last_date = (SELECT MAX(effective_date) FROM records WHERE data_type = NEW.data_type AND effective_date <> '')
-  WHERE data_type = NEW.data_type AND OLD.effective_date IS NOT NEW.effective_date;
-END;
-
-CREATE TRIGGER records_metadata_after_delete
-AFTER DELETE ON records
-BEGIN
-  UPDATE record_day_counts SET record_count = record_count - 1
-  WHERE effective_date = OLD.effective_date AND OLD.effective_date <> '';
-  DELETE FROM record_day_counts WHERE record_count = 0;
-
-  UPDATE record_status SET
-    record_count = record_count - 1,
-    day_count = day_count - CASE
-      WHEN OLD.effective_date <> '' AND NOT EXISTS (
-        SELECT 1 FROM record_day_counts WHERE effective_date = OLD.effective_date
-      ) THEN 1 ELSE 0 END,
-    first_date = (SELECT MIN(effective_date) FROM record_day_counts),
-    last_date = (SELECT MAX(effective_date) FROM record_day_counts),
-    last_sync = (SELECT MAX(synced_at) FROM records)
-  WHERE singleton = 1;
-
-  UPDATE record_dataset_status SET
-    record_count = record_count - 1,
-    first_date = (SELECT MIN(effective_date) FROM records WHERE data_type = OLD.data_type AND effective_date <> ''),
-    last_date = (SELECT MAX(effective_date) FROM records WHERE data_type = OLD.data_type AND effective_date <> '')
-  WHERE data_type = OLD.data_type;
-  DELETE FROM record_dataset_status WHERE data_type = OLD.data_type AND record_count = 0;
-END;
+CREATE TRIGGER records_metadata_after_delete AFTER DELETE ON records BEGIN UPDATE record_day_counts SET record_count = record_count - 1 WHERE effective_date = OLD.effective_date AND OLD.effective_date <> ''; DELETE FROM record_day_counts WHERE record_count = 0; UPDATE record_status SET record_count = record_count - 1, day_count = day_count - iif(OLD.effective_date <> '' AND NOT EXISTS (SELECT 1 FROM record_day_counts WHERE effective_date = OLD.effective_date), 1, 0), first_date = (SELECT MIN(effective_date) FROM record_day_counts), last_date = (SELECT MAX(effective_date) FROM record_day_counts), last_sync = (SELECT MAX(synced_at) FROM records) WHERE singleton = 1; UPDATE record_dataset_status SET record_count = record_count - 1, first_date = (SELECT MIN(effective_date) FROM records WHERE data_type = OLD.data_type AND effective_date <> ''), last_date = (SELECT MAX(effective_date) FROM records WHERE data_type = OLD.data_type AND effective_date <> '') WHERE data_type = OLD.data_type; DELETE FROM record_dataset_status WHERE data_type = OLD.data_type AND record_count = 0; END;
 
 -- Keep migration-first rollout compatible with the old Worker. It omits the
 -- new column on insert and on conflict updates. UPDATE is guarded so the
 -- compatibility write neither recurses nor touches already-canonical rows.
-CREATE TRIGGER records_effective_date_after_insert
-AFTER INSERT ON records
-WHEN NEW.effective_date = ''
-BEGIN
-  UPDATE records SET effective_date = (
-    SELECT canonical_day FROM record_canonical_days
-    WHERE data_type = NEW.data_type AND record_id = NEW.record_id
-  )
-  WHERE data_type = NEW.data_type AND record_id = NEW.record_id;
-END;
+CREATE TRIGGER records_effective_date_after_insert AFTER INSERT ON records WHEN NEW.effective_date = '' BEGIN UPDATE records SET effective_date = (SELECT canonical_day FROM record_canonical_days WHERE data_type = NEW.data_type AND record_id = NEW.record_id) WHERE data_type = NEW.data_type AND record_id = NEW.record_id; END;
 
-CREATE TRIGGER records_effective_date_after_update
-AFTER UPDATE OF record_date, start_datetime, payload_json ON records
-WHEN NEW.effective_date IS OLD.effective_date
- AND NEW.effective_date IS NOT (
-   SELECT canonical_day FROM record_canonical_days
-   WHERE data_type = NEW.data_type AND record_id = NEW.record_id
- )
-BEGIN
-  UPDATE records SET effective_date = (
-    SELECT canonical_day FROM record_canonical_days
-    WHERE data_type = NEW.data_type AND record_id = NEW.record_id
-  )
-  WHERE data_type = NEW.data_type AND record_id = NEW.record_id;
-END;
+CREATE TRIGGER records_effective_date_after_update AFTER UPDATE OF record_date, start_datetime, payload_json ON records WHEN NEW.effective_date IS OLD.effective_date AND NEW.effective_date IS NOT (SELECT canonical_day FROM record_canonical_days WHERE data_type = NEW.data_type AND record_id = NEW.record_id) BEGIN UPDATE records SET effective_date = (SELECT canonical_day FROM record_canonical_days WHERE data_type = NEW.data_type AND record_id = NEW.record_id) WHERE data_type = NEW.data_type AND record_id = NEW.record_id; END;

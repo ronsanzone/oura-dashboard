@@ -44,6 +44,18 @@ describe("record storage", () => {
     return { db, env, insert, queries }
   }
 
+  it("keeps D1 trigger definitions on one CASE-free physical line", () => {
+    const triggerCount = effectiveDateMigration.match(/\bCREATE\s+TRIGGER\b/gi)?.length ?? 0
+    const triggerLines = effectiveDateMigration.match(/^CREATE\s+TRIGGER\b.*$/gim) ?? []
+
+    expect(triggerCount).toBeGreaterThan(0)
+    expect(triggerLines).toHaveLength(triggerCount)
+    for (const definition of triggerLines) {
+      expect(definition).toMatch(/\bBEGIN\b.*\bEND;$/i)
+      expect(definition).not.toMatch(/\bCASE\b/i)
+    }
+  })
+
   it("filters on materialized Eastern effective dates rather than leaking unrelated HR", async () => {
     const { db, env, insert } = database()
     try {
