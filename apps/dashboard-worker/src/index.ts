@@ -14,6 +14,7 @@ const maxWebhookBodyBytes = 64 * 1024
 const maxSyncBodyBytes = 4 * 1024
 const routineSyncDays = 2
 const datePattern = /^\d{4}-\d{2}-\d{2}$/
+const fingerprintedAssetPath = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[^/]+$/
 
 const validDate = (value: string): boolean => {
   if (!datePattern.test(value)) return false
@@ -101,11 +102,16 @@ const webhook = async (request: Request, env: AppEnv, url: URL): Promise<Respons
   return new Response("OK", { status: 200 })
 }
 
-const serveAsset = (request: Request, env: AppEnv): Promise<Response> => {
+const serveAsset = async (request: Request, env: AppEnv): Promise<Response> => {
   const url = new URL(request.url)
   const assetUrl = new URL(request.url)
   if (!url.pathname.includes(".")) assetUrl.pathname = "/index.html"
-  return env.ASSETS.fetch(new Request(assetUrl, request))
+  const asset = await env.ASSETS.fetch(new Request(assetUrl, request))
+  const headers = new Headers(asset.headers)
+  headers.set("cache-control", asset.ok && fingerprintedAssetPath.test(url.pathname)
+    ? "public, max-age=31536000, immutable"
+    : "no-cache")
+  return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers })
 }
 
 const api = async (request: Request, env: AppEnv, url: URL): Promise<Response> => {

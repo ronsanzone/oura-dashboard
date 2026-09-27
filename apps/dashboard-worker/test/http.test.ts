@@ -5,6 +5,43 @@ import worker from "../src/index.js"
 import type { AppEnv } from "../src/types.js"
 
 describe("HTTP responses", () => {
+  it("only caches successful fingerprinted assets immutably and revalidates HTML", async () => {
+    const assetRequests: string[] = []
+    const env = {
+      DEPLOYMENT_MODE: "local",
+      DASHBOARD_HOSTNAME: "localhost",
+      WEBHOOK_HOSTNAME: "oura-hooks.localhost",
+      ASSETS: {
+        fetch: async (request: Request) => {
+          const pathname = new URL(request.url).pathname
+          assetRequests.push(pathname)
+          return new Response(pathname === "/index.html" ? "<main>Dashboard</main>" : "asset", {
+            status: pathname === "/assets/missing-abcdefgh.js" ? 404 : 200,
+            headers: { "cache-control": "public, max-age=14400" }
+          })
+        }
+      }
+    } as unknown as AppEnv
+    const fetch = (path: string) => worker.fetch(new Request(`http://localhost${path}`), env, {} as ExecutionContext)
+
+    expect((await fetch("/")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/sleep")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/index.html")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/favicon.svg")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/assets/index-Ab12_cd3.js")).headers.get("cache-control")).toBe("public, max-age=31536000, immutable")
+    expect((await fetch("/assets/runtime.js")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/downloads/index-Ab12_cd3.js")).headers.get("cache-control")).toBe("no-cache")
+    expect((await fetch("/assets/missing-abcdefgh.js")).headers.get("cache-control")).toBe("no-cache")
+    expect(assetRequests.slice(0, 3)).toEqual(["/index.html", "/index.html", "/index.html"])
+  })
+
+  it("keeps API errors out of caches", async () => {
+    const env = { DEPLOYMENT_MODE: "local", DASHBOARD_HOSTNAME: "localhost", WEBHOOK_HOSTNAME: "oura-hooks.localhost" } as unknown as AppEnv
+    const response = await worker.fetch(new Request("http://localhost/api/not-found"), env, {} as ExecutionContext)
+    expect(response.status).toBe(404)
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  })
+
   it("protects production UI and both read APIs before touching storage", async () => {
     const env = { DEPLOYMENT_MODE: "production", DASHBOARD_HOSTNAME: "oura.example" } as unknown as AppEnv
     for (const path of ["/", "/api/status", "/api/records"]) {

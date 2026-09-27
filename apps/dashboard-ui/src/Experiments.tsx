@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react"
-import ReactECharts from "echarts-for-react"
 import { localDay, shiftDay } from "@oura/shared"
 import { adherenceLabels, adherenceStates, experimentMetrics, summarizeExperiment, validateExperiment, type CheckIn, type EvidenceDay, type Experiment, type ExperimentEvidence, type ExperimentMetric, type ExperimentRevision, type ExperimentSnapshot } from "@oura/shared/experiments"
 import { contextTopics, type ContextProposal, type ContextRevision, type ContextTopic } from "@oura/shared/context"
+import { Chart } from "./Chart"
 import { contextRequest, ProposalSource } from "./Debrief"
 
 const metrics = Object.keys(experimentMetrics) as ExperimentMetric[]
@@ -85,7 +85,7 @@ function Evidence({ revision, evidence }: { revision: ExperimentRevision; eviden
       <details><summary>Within-experiment adherence comparisons</summary>{charts.map(metric => <div key={metric}><h4>{experimentMetrics[metric][0]}</h4><Comparison days={days} metric={metric} cohorts /></div>)}</details>
     </section>
     <section className="panel"><span className="eyebrow">THE DAILY EVIDENCE</span><h2>A pattern, not a verdict.</h2><label>Timeline measure<select value={selected} onChange={v => setSelected(v.target.value as ExperimentMetric)}>{charts.map(k => <option key={k} value={k}>{experimentMetrics[k][0]}</option>)}</select></label>
-      <ReactECharts option={option} notMerge style={{ height: 440 }} />
+      <Chart option={option} height={440} />
       <p className="caption">Exposure dates on the shared axis; outcomes from {e.alignment ? "the following day" : "the same day"}. Lines do not bridge missing values. All measured days—including exclusions—remain in this chart and ledger. Adherence is categorical, not a score.</p>
       <label className="cursor-control">Inspect a day<input type="range" min={0} max={Math.max(0, days.length - 1)} value={inspect} onChange={v => setInspect(Number(v.target.value))} /></label>
       {active && <div className="moment"><strong>{active.day} · {active.period}</strong><span>{active.period === "During" ? adherenceLabels[active.checkIn.adherence] : "No adherence cohort"}</span><span>Outcome {active.outcomeDay}: {format(active.values[selected])} {experimentMetrics[selected][1]}</span><span>{active.checkIn.exclusion ? `Excluded: ${active.checkIn.exclusion}` : "Included if measured"}</span><span>{active.checkIn.note || "No manual note"}</span><span>{active.context.length ? active.context.join(" · ") : "No context logged; absence unknown"}</span></div>}
